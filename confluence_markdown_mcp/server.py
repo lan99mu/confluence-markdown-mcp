@@ -1,0 +1,119 @@
+"""MCP server exposing Confluence ↔ Markdown tools.
+
+Built on top of the official `mcp` Python SDK (``mcp.server.fastmcp``),
+which implements the latest Model Context Protocol stdio transport.  The
+server registers three tools and one resource:
+
+* ``pull_page``   – download a Confluence page as Markdown.
+* ``push_page``   – upload a local Markdown file back to a page.
+* ``read_page``   – fetch a page and return the Markdown body only
+  (no file is written).
+* Resource ``confluence://page/{page_id}`` – read-only Markdown view of a
+  page, useful for clients that prefer resources over tools.
+"""
+
+from __future__ import annotations
+
+import os
+from typing import Any, Dict, Optional
+
+try:  # pragma: no cover - import guard for users without the SDK
+    from mcp.server.fastmcp import FastMCP
+except ImportError as exc:  # pragma: no cover
+    raise RuntimeError(
+        "The 'mcp' package is required to run the MCP server. "
+        "Install it with `pip install mcp` (or `pip install .[mcp]`)."
+    ) from exc
+
+from .service import ConfluenceService, page_summary
+
+
+def create_server(service: Optional[ConfluenceService] = None) -> FastMCP:
+    """Build and return a configured :class:`FastMCP` instance.
+
+    The service is created lazily on the first tool invocation so that the
+    server can start even when credentials are only injected later (for
+    example by MCP clients that set environment variables just before
+    spawning the child process).
+    """
+
+    app = FastMCP(
+        name="confluence-markdown-mcp",
+        instructions=(
+            "Pull Confluence wiki pages to local Markdown and push local "
+            "edits back. Configure CONFLUENCE_BASE_URL, CONFLUENCE_EMAIL "
+            "and CONFLUENCE_API_TOKEN in the environment."
+        ),
+    )
+
+    _state: Dict[str, Any] = {"service": service}
+
+    def _service() -> ConfluenceService:
+        if _state["service"] is None:
+            _state["service"] = ConfluenceService()
+        return _state["service"]
+
+    @app.tool(
+        name="pull_page",
+        description=(
+            "Download a Confluence page as Markdown. If output_path is "
+            "provided the Markdown (with front matter) is written to disk; "
+            "otherwise the full Markdown body is returned inline."
+        ),
+    )
+    def pull_page(page_id: str, output_path: Optional[str] = None) -> Dict[str, Any]:
+        result = _service().pull_page(page_id=page_id, output_path=output_path)
+        payload = page_summary(result)
+        if not output_path:
+            payload["markdown"] = result.markdown
+        return payload
+
+    @app.tool(
+        name="push_page",
+        description=(
+            "Upload a local Markdown file back to a Confluence page. The "
+            "page_id can be supplied directly or read from the file's "
+            "YAML-style front matter."
+        ),
+    )
+    def push_page(
+        file_path: str,
+        page_id: Optional[str] = None,
+        title: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        if not os.path.isfile(file_path):
+            raise FileNotFoundError(f"No such markdown file: {file_path}")
+        result = _service().push_page(
+            file_path=file_path, page_id=page_id, title=title
+        )
+        return page_summary(result)
+
+    @app.tool(
+        name="read_page",
+        description=(
+            "Fetch a Confluence page and return only the converted Markdown "
+            "body. Useful for previewing without writing a file."
+        ),
+    )
+    def read_page(page_id: str) -> Dict[str, Any]:
+        result = _service().pull_page(page_id=page_id, output_path=None)
+        return {
+            "page_id": result.page_id,
+            "title": result.title,
+            "version": result.version,
+            "markdown": result.markdown,
+        }
+
+    @app.resource("confluence://page/{page_id}")
+    def page_resource(page_id: str) -> str:
+        result = _service().pull_page(page_id=page_id, output_path=None)
+        return result.markdown
+
+    return app
+
+
+def run() -> None:
+    """Entry point used by the ``confluence-markdown-mcp serve`` command."""
+
+    server = create_server()
+    server.run()  # stdio transport by default

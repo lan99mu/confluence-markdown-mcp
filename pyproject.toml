@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "confluence-markdown-mcp"
+version = "0.2.0"
+description = "MCP server and CLI that syncs Confluence wiki pages with local Markdown files."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [
+    { name = "confluence-markdown-mcp contributors" },
+]
+keywords = ["confluence", "markdown", "mcp", "model-context-protocol", "wiki"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Documentation",
+]
+dependencies = [
+    "mcp>=1.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+
+[project.scripts]
+confluence-markdown-mcp = "confluence_markdown_mcp.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/lan99mu/confluence-markdown-mcp"
+Issues = "https://github.com/lan99mu/confluence-markdown-mcp/issues"
+
+[tool.setuptools.packages.find]
+include = ["confluence_markdown_mcp*"]
+exclude = ["tests*"]
