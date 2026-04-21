@@ -104,6 +104,9 @@ class ConfluenceClient:
                 return json.loads(body) if body else {}
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8")
+            detail = re.sub(r"\s+", " ", detail).strip()
+            if len(detail) > 300:
+                detail = detail[:300] + "..."
             raise RuntimeError(f"Confluence API error ({exc.code}): {detail}") from exc
 
     def get_page(self, page_id: str):
@@ -194,7 +197,13 @@ def _inline_markdown_to_html(text: str) -> str:
     escaped = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
     escaped = re.sub(r"\*(.+?)\*", r"<em>\1</em>", escaped)
     escaped = re.sub(r"`(.+?)`", r"<code>\1</code>", escaped)
-    escaped = re.sub(r"\[(.+?)\]\((https?://[^\s)]+)\)", r'<a href="\2">\1</a>', escaped)
+
+    def _replace_link(match):
+        label = match.group(1)
+        url = html.escape(html.unescape(match.group(2)), quote=True)
+        return f'<a href="{url}">{label}</a>'
+
+    escaped = re.sub(r"\[(.+?)\]\((https?://[^\s)]+)\)", _replace_link, escaped)
     return escaped
 
 
