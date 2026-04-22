@@ -17,6 +17,7 @@ needs no modification.
 from __future__ import annotations
 
 import html
+import os
 import re
 from typing import Dict, List, Optional, Tuple
 
@@ -25,7 +26,15 @@ from markdown_it.token import Token
 
 from ._iframe import parse_iframe_markup, render_iframe
 from ._style import SAFE_ALIGN_VALUES, build_span_style, extract_align
-from .macros import ADMONITIONS, UNKNOWN_MACRO_RE
+from .macros import (
+    ADMONITIONS,
+    ATTACHMENTS_DIRNAME,
+    ATTACHMENT_LINK_MARKER_RE,
+    IMAGE_ATTR_COMMENT_RE,
+    UNKNOWN_MACRO_RE,
+    parse_image_attr_comment,
+    sanitize_attachment_filename,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -466,15 +475,29 @@ def _render_inline(children: List[Token]) -> str:
             buf.append("</s>")
         elif ty == "link_open":
             href = dict(t.attrs or {}).get("href", "")
+            # Attachment-backed link when the pull side marked it, or when
+            # the href is a relative path that lives under the attachments
+            # directory (``attachments/foo.pdf``).  The close token is
+            # consumed by the helper so we don't emit an ``</a>`` later.
+            marker_index = _find_attachment_marker(children, i)
+            is_attachment = marker_index is not None or _is_local_attachment_path(href)
+            if is_attachment:
+                consumed = _emit_attachment_link(buf, children, i, href, marker_index)
+                i = consumed
+                continue
             buf.append(f'<a href="{html.escape(href, quote=True)}">')
         elif ty == "link_close":
             buf.append("</a>")
         elif ty == "image":
             attrs = dict(t.attrs or {})
-            src = html.escape(attrs.get("src", ""), quote=True)
+            src = attrs.get("src", "")
             alt_text = "".join(_plain_text(c) for c in (t.children or []))
-            alt = html.escape(alt_text, quote=True)
-            buf.append(f'<ac:image><ri:url ri:value="{src}" ri:title="{alt}" /></ac:image>')
+            # An optional ``<!--cm-image …-->`` comment immediately after
+            # the image carries width / height / align that Markdown can
+            # not express natively.
+            extra_attrs, skip = _consume_image_attr_comment(children, i + 1)
+            buf.append(_render_image(src, alt_text, extra_attrs))
+            i += skip
         elif ty == "html_inline":
             buf.append(_sanitise_html_inline(children, i, buf))
             # _sanitise_html_inline may consume trailing tokens (e.g. span
@@ -499,6 +522,178 @@ def _plain_text(tok: Token) -> str:
     return ""
 
 
+# ---------------------------------------------------------------------------
+# Image / attachment helpers
+# ---------------------------------------------------------------------------
+
+
+_EXTERNAL_URL_RE = re.compile(r"^[a-zA-Z][\w+.-]*:|^//|^#", re.ASCII)
+
+
+def _is_external_url(src: str) -> bool:
+    """Return True when ``src`` looks like an http(s)/data/mailto URL etc."""
+
+    return bool(src and _EXTERNAL_URL_RE.match(src))
+
+
+def _is_local_attachment_path(href: str) -> bool:
+    """Heuristic for links that point at a file stored as an attachment.
+
+    We only treat relative paths living under ``attachments/`` as
+    attachments; other relative paths may be wiki page references so we
+    leave them as ordinary ``<a href>`` to avoid false positives.
+    """
+
+    if not href or _is_external_url(href):
+        return False
+    normalized = href.replace("\\", "/").lstrip("./")
+    return normalized.startswith(ATTACHMENTS_DIRNAME + "/")
+
+
+def _consume_image_attr_comment(
+    children: List[Token], start: int
+) -> Tuple[Dict[str, str], int]:
+    """If the next inline token is a ``<!--cm-image …-->`` marker, parse it.
+
+    Returns ``(attrs_dict, tokens_consumed_beyond_the_image)``.
+    """
+
+    j = start
+    # Allow a single whitespace-only text token between image and comment.
+    if j < len(children) and children[j].type == "text" and not children[j].content.strip():
+        j += 1
+    if j < len(children) and children[j].type == "html_inline":
+        attrs = parse_image_attr_comment(children[j].content)
+        if attrs:
+            return attrs, j - start + 1
+    return {}, 0
+
+
+def _find_attachment_marker(children: List[Token], link_open_index: int) -> Optional[int]:
+    """Return the index of a ``<!--cm-attachment-->`` marker following the link.
+
+    Scans forward from ``link_open_index`` looking for the matching
+    ``link_close`` and, immediately after, an ``html_inline`` token whose
+    content is the attachment marker.  Returns ``None`` when no marker is
+    present; otherwise the index of the marker token.
+    """
+
+    depth = 0
+    j = link_open_index
+    while j < len(children):
+        tok = children[j]
+        if tok.type == "link_open":
+            depth += 1
+        elif tok.type == "link_close":
+            depth -= 1
+            if depth == 0:
+                k = j + 1
+                if (
+                    k < len(children)
+                    and children[k].type == "text"
+                    and not children[k].content.strip()
+                ):
+                    k += 1
+                if (
+                    k < len(children)
+                    and children[k].type == "html_inline"
+                    and ATTACHMENT_LINK_MARKER_RE.match(children[k].content or "")
+                ):
+                    return k
+                return None
+        j += 1
+    return None
+
+
+def _emit_attachment_link(
+    buf: List[str],
+    children: List[Token],
+    link_open_index: int,
+    href: str,
+    marker_index: Optional[int],
+) -> int:
+    """Emit a ``<ac:link><ri:attachment/>…`` and return the new cursor.
+
+    Consumes tokens up to and including the ``link_close`` (and the
+    trailing marker when present) so the outer loop can skip past them.
+    """
+
+    # Collect the label text from the tokens between link_open and link_close.
+    label_parts: List[str] = []
+    depth = 0
+    j = link_open_index
+    close_index = link_open_index
+    while j < len(children):
+        tok = children[j]
+        if tok.type == "link_open":
+            depth += 1
+        elif tok.type == "link_close":
+            depth -= 1
+            if depth == 0:
+                close_index = j
+                break
+        else:
+            if depth >= 1:
+                label_parts.append(_plain_text(tok))
+        j += 1
+
+    label = "".join(label_parts).strip()
+    filename = sanitize_attachment_filename(os.path.basename(href.replace("\\", "/")))
+    safe_label = (label or filename).replace("]]>", "]]]]><![CDATA[>")
+    buf.append(
+        f'<ac:link><ri:attachment ri:filename="{html.escape(filename, quote=True)}" />'
+        f"<ac:plain-text-link-body><![CDATA[{safe_label}]]></ac:plain-text-link-body>"
+        "</ac:link>"
+    )
+    # Advance past link_close and an optional marker/text-whitespace pair.
+    new_i = close_index + 1
+    if marker_index is not None and marker_index >= new_i:
+        new_i = marker_index + 1
+    return new_i
+
+
+def _render_image(src: str, alt: str, extra: Dict[str, str]) -> str:
+    """Render a Markdown image as a Confluence ``<ac:image>`` element.
+
+    * Absolute URLs keep the historical ``<ri:url>`` child.
+    * Relative paths are rewritten to ``<ri:attachment ri:filename="…"/>``.
+    * ``extra`` may contain ``width`` / ``height`` / ``align`` etc.
+      preserved from the pull side.
+    """
+
+    attr_parts: List[str] = []
+    if alt:
+        attr_parts.append(f'ac:alt="{html.escape(alt, quote=True)}"')
+    # Preserve a small allow-list of dimension / layout attributes.
+    for key in ("title", "width", "height", "align", "layout", "thumbnail", "border", "class", "style"):
+        value = extra.get(key)
+        if not value:
+            continue
+        attr_parts.append(f'ac:{key}="{html.escape(value, quote=True)}"')
+    attrs_blob = (" " + " ".join(attr_parts)) if attr_parts else ""
+
+    if _is_external_url(src):
+        title = html.escape(alt, quote=True)
+        url = html.escape(src, quote=True)
+        return (
+            f"<ac:image{attrs_blob}>"
+            f'<ri:url ri:value="{url}" ri:title="{title}" />'
+            "</ac:image>"
+        )
+
+    basename = os.path.basename(src.replace("\\", "/")) if src else ""
+    filename = sanitize_attachment_filename(basename) if basename else ""
+    if not filename:
+        # No resolvable target – fall back to an empty image so we don't
+        # crash; the user can fix the source in the editor.
+        return f"<ac:image{attrs_blob}></ac:image>"
+    return (
+        f"<ac:image{attrs_blob}>"
+        f'<ri:attachment ri:filename="{html.escape(filename, quote=True)}" />'
+        "</ac:image>"
+    )
+
+
 def _sanitise_html_inline(
     children: List[Token], index: int, buf: List[str]
 ) -> str:
@@ -514,6 +709,14 @@ def _sanitise_html_inline(
     raw = children[index].content
     if _BR_RE.match(raw):
         return "<br/>"
+    if IMAGE_ATTR_COMMENT_RE.match(raw or ""):
+        # Image-attribute marker left over when the comment was not
+        # adjacent to an image token (e.g. because the user edited the
+        # file and removed the image).  Drop it silently.
+        return ""
+    if ATTACHMENT_LINK_MARKER_RE.match(raw or ""):
+        # Similar story for orphaned attachment-link markers.
+        return ""
     if _INLINE_HTML_PASSTHROUGH.match(raw):
         return raw.lower()
     span = _SPAN_OPEN_RE.match(raw)
