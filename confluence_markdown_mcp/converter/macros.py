@@ -139,12 +139,12 @@ def _rewrite_task_lists(storage_html: str) -> str:
         inner = _TASK_RE.sub(_render_task, inner)
         return f"<ul>{inner}</ul>"
 
-    previous = None
-    current = storage_html
     # Iterate so that nested ``<ac:task-list>`` entries are rewritten too.
-    while previous != current:
-        previous = current
-        current = _TASK_LIST_RE.sub(_render_task_list, current)
+    current = storage_html
+    while True:
+        current, count = _TASK_LIST_RE.subn(_render_task_list, current)
+        if not count:
+            break
     return current
 
 

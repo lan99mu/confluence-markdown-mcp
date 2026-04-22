@@ -114,6 +114,22 @@ def test_color_span_round_trip():
     assert '<span style="color: #00ff00">green</span>' in back
 
 
+def test_color_span_rejects_css_injection():
+    """Unsafe CSS colour payloads must not leak into the output."""
+
+    cases = [
+        ("expression(alert(1))", "expression"),
+        ("red{}/*", "{"),
+        ("url(x)", "url"),
+        ("rgb(1,2,3); xss", "xss"),
+    ]
+    for payload, forbidden in cases:
+        storage = f'<p><span style="color: {payload}">x</span></p>'
+        md = storage_to_markdown(storage)
+        assert forbidden not in md
+        assert markdown_to_storage(md).find(forbidden) == -1
+
+
 def test_task_list_converted_to_task_markers():
     storage = (
         "<p>任务：</p>"

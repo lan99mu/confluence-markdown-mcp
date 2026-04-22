@@ -333,10 +333,23 @@ _LINK_RE = re.compile(r"\[(?P<label>[^\]]+)\]\((?P<url>[^)\s]+)\)")
 _IMAGE_RE = re.compile(r"!\[(?P<alt>[^\]]*)\]\((?P<src>[^)\s]+)\)")
 # Inline colour wrappers produced by ``storage_to_markdown``.  They must
 # round-trip back to the storage format verbatim so colours survive a
-# pull → edit → push cycle.
+# pull → edit → push cycle.  The colour value is validated against a
+# strict allow-list at substitution time so crafted markdown cannot inject
+# arbitrary CSS into the storage XML.
 _COLOR_SPAN_RE = re.compile(
     r'<span\s+style="color:\s*(?P<color>[^";<>]+)"\s*>(?P<body>.*?)</span>',
     re.DOTALL | re.IGNORECASE,
+)
+_SAFE_COLOR_RE = re.compile(
+    r"(?ix)"
+    r"^(?:"
+    r"  \#[0-9a-f]{3,8}"
+    r"| rgb\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*\)"
+    r"| rgba\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*(?:\d*\.)?\d+\s*\)"
+    r"| hsl\(\s*\d{1,3}\s*,\s*\d{1,3}%\s*,\s*\d{1,3}%\s*\)"
+    r"| hsla\(\s*\d{1,3}\s*,\s*\d{1,3}%\s*,\s*\d{1,3}%\s*,\s*(?:\d*\.)?\d+\s*\)"
+    r"| [a-z]{3,30}"
+    r")$"
 )
 
 
@@ -362,9 +375,15 @@ def _render_inline(text: str) -> str:
     spans: List[str] = []
 
     def _stash_color_span(match: "re.Match[str]") -> str:
-        color = html.escape(match.group("color").strip(), quote=True)
+        color = match.group("color").strip()
+        if not _SAFE_COLOR_RE.match(color):
+            # Unrecognised/unsafe colour – fall through so the literal
+            # ``<span>`` text is HTML-escaped like any other input.
+            return match.group(0)
         body = _render_inline(match.group("body"))
-        spans.append(f'<span style="color: {color}">{body}</span>')
+        spans.append(
+            f'<span style="color: {html.escape(color, quote=True)}">{body}</span>'
+        )
         return f"\0SPAN{len(spans) - 1}\0"
 
     text = _COLOR_SPAN_RE.sub(_stash_color_span, text)

@@ -303,9 +303,30 @@ def _normalise_cell(text: str) -> str:
 
 _COLOR_RE = re.compile(r"(?i)color\s*:\s*([^;]+?)\s*(?:;|$)")
 
+# Allow-list of safe CSS colour values.  Restricting to these formats
+# prevents CSS injection via crafted ``style`` attributes (e.g. smuggling
+# additional declarations or ``expression()`` payloads into the markdown
+# output).
+_SAFE_COLOR_RE = re.compile(
+    r"(?ix)"
+    r"^(?:"
+    r"  \#[0-9a-f]{3,8}"                                   # hex #rgb / #rrggbb(aa)
+    r"| rgb\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*\)"   # rgb(r,g,b)
+    r"| rgba\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*(?:\d*\.)?\d+\s*\)"
+    r"| hsl\(\s*\d{1,3}\s*,\s*\d{1,3}%\s*,\s*\d{1,3}%\s*\)"
+    r"| hsla\(\s*\d{1,3}\s*,\s*\d{1,3}%\s*,\s*\d{1,3}%\s*,\s*(?:\d*\.)?\d+\s*\)"
+    r"| [a-z]{3,30}"                                       # CSS named colour
+    r")$"
+)
+
 
 def _extract_color(style: str) -> str:
-    """Return the CSS ``color`` value from a ``style`` attribute, if any."""
+    """Return the CSS ``color`` value from a ``style`` attribute, if any.
+
+    Only returns values that match a strict allow-list of CSS colour
+    formats (hex / rgb / rgba / hsl / hsla / named).  Anything else is
+    discarded to avoid CSS injection via crafted ``style`` attributes.
+    """
 
     if not style:
         return ""
@@ -313,9 +334,7 @@ def _extract_color(style: str) -> str:
     if not match:
         return ""
     color = match.group(1).strip()
-    # Basic sanitisation: reject values that look like they try to break out
-    # of the style attribute.
-    if any(c in color for c in "\"<>"):
+    if not _SAFE_COLOR_RE.match(color):
         return ""
     return color
 
