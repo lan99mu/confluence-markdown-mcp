@@ -31,9 +31,14 @@ class ConfluenceClient:
         email: str,
         api_token: str,
         timeout: float = 30.0,
+        is_cloud: bool = True,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.is_cloud = is_cloud
+        # Cloud instances serve the REST API under `/wiki/rest/api`, while
+        # Server / Data Center installations use `/rest/api` directly.
+        self._api_prefix = "/wiki/rest/api" if is_cloud else "/rest/api"
         auth = f"{email}:{api_token}".encode("utf-8")
         self._auth_header = "Basic " + base64.b64encode(auth).decode("utf-8")
 
@@ -45,6 +50,7 @@ class ConfluenceClient:
             email=settings.email,
             api_token=settings.api_token,
             timeout=settings.timeout,
+            is_cloud=settings.is_cloud,
         )
 
     def _request(
@@ -86,7 +92,7 @@ class ConfluenceClient:
         """Fetch a page with body (storage format), version and space info."""
 
         expand = urllib.parse.quote("body.storage,version,space")
-        path = f"/wiki/rest/api/content/{page_id}?expand={expand}"
+        path = f"{self._api_prefix}/content/{page_id}?expand={expand}"
         return self._request("GET", path)
 
     def update_page(
@@ -110,4 +116,4 @@ class ConfluenceClient:
                 }
             },
         }
-        return self._request("PUT", f"/wiki/rest/api/content/{page_id}", payload)
+        return self._request("PUT", f"{self._api_prefix}/content/{page_id}", payload)
