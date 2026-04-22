@@ -107,7 +107,7 @@ confluence-markdown-mcp serve
 
 | 工具 | 参数 | 说明 |
 | --- | --- | --- |
-| `pull_page` | `page_id`, `output_path?` | 拉取为 Markdown；`output_path` 不传则返回内容 |
+| `pull_page` | `page_id`, `output_dir?` | 拉取为 Markdown；`output_dir` 仅指定目录（文件名由服务端按页面标题自动生成），不传则直接返回内容 |
 | `push_page` | `file_path`, `page_id?`, `title?` | 上传本地 `.md` 到 wiki |
 | `read_page` | `page_id` | 仅返回 Markdown（不落盘） |
 

@@ -14,7 +14,7 @@ This skill teaches an MCP-capable assistant how to work with the
 Invoke this skill whenever the user wants to:
 
 - **Read / fetch** a Confluence wiki page for editing, summarisation or
-  quotation (use `pull_page` with `output_path`, or `read_page` if you only
+  quotation (use `pull_page` with `output_dir`, or `read_page` if you only
   need the content).
 - **Edit and publish** local Markdown changes back to Confluence (use
   `push_page` with the exact path and `page_id`).
@@ -35,16 +35,19 @@ user that the following are set before the first call:
 Optional:
 
 - `CONFLUENCE_TIMEOUT`        – HTTP timeout in seconds (default `30`)
-- `CONFLUENCE_MARKDOWN_DIR`   – default root for relative `output_path`s
+- `CONFLUENCE_MARKDOWN_DIR`   – default root for relative `output_dir`s
 
 ## Tools provided
 
-### `pull_page(page_id: string, output_path?: string)`
+### `pull_page(page_id: string, output_dir?: string)`
 
-Downloads a Confluence page. When `output_path` is provided, the Markdown
-(with YAML-style front matter containing `page_id`, `title`, `space_key` and
-`version`) is written to disk and the response contains a `markdown_preview`.
-Without `output_path`, the full Markdown body is returned in `markdown`.
+Downloads a Confluence page. When `output_dir` is provided it **must be a
+directory** – the Markdown file name is generated automatically by the
+server from the page title (unsafe characters are stripped), so the
+caller should never pass a full file path. The resulting file contains
+YAML-style front matter (`page_id`, `title`, `space_key`, `version`) and
+the response includes `markdown_preview` plus the resolved `path`.
+Without `output_dir`, the full Markdown body is returned in `markdown`.
 
 ### `push_page(file_path: string, page_id?: string, title?: string)`
 
@@ -61,7 +64,8 @@ the Markdown body plus basic metadata.
 ## Recommended workflow
 
 1. Ask the user for the Confluence page ID (and optional local path).
-2. Call `pull_page` with an `output_path`; confirm the new file location.
+2. Call `pull_page` with an `output_dir`; confirm the new file location
+   (the filename is produced from the page title by the server).
 3. Propose Markdown edits; have the user review before uploading.
 4. Call `push_page` with the same `file_path`; display the returned new
    `version`.
