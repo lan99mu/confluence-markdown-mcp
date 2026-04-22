@@ -37,7 +37,18 @@ _ADMONITION_HEADER_RE = re.compile(
 _HEADING_RE = re.compile(r"^(?P<hashes>#{1,6})\s+(?P<text>.*)$")
 _UL_RE = re.compile(r"^(?P<indent>\s*)[-*]\s+(?P<text>.*)$")
 _OL_RE = re.compile(r"^(?P<indent>\s*)\d+\.\s+(?P<text>.*)$")
-_TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$")
+_TABLE_SEP_RE = re.compile(
+    r"^\s*(?:"
+    # Single-column separator: pipes required on both sides so a bare
+    # ``---`` line is still treated as a horizontal rule / paragraph,
+    # not a table.
+    r"\|\s*:?-{3,}:?\s*\|"
+    r"|"
+    # Multi-column separator: outer pipes optional, at least two
+    # ``---`` groups joined by pipes.
+    r"\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?"
+    r")\s*$"
+)
 _IFRAME_BLOCK_RE = re.compile(
     r"^<iframe\b[^>]*>\s*</iframe>\s*$|^<iframe\b[^>]*/\s*>\s*$",
     re.IGNORECASE,
