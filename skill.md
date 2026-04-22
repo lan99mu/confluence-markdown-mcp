@@ -22,8 +22,10 @@ Invoke this skill whenever the user wants to:
   `push_page` with the exact path and `page_id`).
 - Preview a page inline – access the `confluence://page/{page_id}` resource.
 
-Do **not** use it for creating brand-new pages or managing attachments; those
-are out of scope in the current version.
+Do **not** use it for creating brand-new pages; that is out of scope in the
+current version. Attachments referenced by the page (images and file links)
+are synchronised automatically in both directions — downloaded alongside
+the Markdown file on `pull_page`, and created / updated on `push_page`.
 
 ## Prerequisites
 

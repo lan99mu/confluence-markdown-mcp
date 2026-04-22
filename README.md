@@ -11,7 +11,7 @@ Context Protocol)** 服务端，可直接挂接到 Claude Desktop、Continue、C
 - ⬇️ **Pull**：把 Confluence 页面拉取到本地为 `.md` 文件（带 front matter）
 - ⬆️ **Push**：把本地 `.md` 文件按 `pageId` 上传回 Wiki
 - 🧱 **正确处理特殊样式区块**：代码宏、`info/note/warning/tip` 提示框、表格、
-  列表、链接、图片，以及未知宏（保留并原样回写）
+  列表、链接、图片与附件（双向同步），以及未知宏（保留并原样回写）
 - 🧭 **分层/模块化**：`config` / `client` / `converter` / `files` / `service` /
   `server` / `cli` 各司其职，代码可读性高、便于扩展
 - 🧪 带有基础单元测试，保证格式往返稳定

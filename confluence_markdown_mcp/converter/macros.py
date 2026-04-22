@@ -8,16 +8,24 @@ cleanly to Markdown:
 * ``info`` / ``note`` / ``warning`` / ``tip`` – admonition panels, rendered
   as Markdown blockquotes prefixed with ``> [!INFO]``-style labels.
 
-Any other structured macro (attachment, jira issue, etc.) is preserved
-verbatim as an HTML comment token so that a pull → edit → push round trip
-does not silently discard content.
+In addition this module rewrites ``<ac:image>`` and ``<ac:link>`` elements
+that reference ``<ri:attachment>`` / ``<ri:url>`` children into plain
+Markdown image / link syntax – otherwise lxml's HTML parser would silently
+drop the ``ri:*`` children and we would lose the filename.  Extra image
+attributes (width / height / align) are preserved via a compact HTML
+comment marker so a pull → edit → push round trip does not silently
+discard them.
+
+Any other structured macro (jira issue, etc.) is preserved verbatim as an
+HTML comment token so round-tripping still does not lose content.
 """
 
 from __future__ import annotations
 
 import html
+import os
 import re
-from typing import List, Tuple
+from typing import Iterable, List, Set, Tuple
 
 # ---- Recognised admonition macros ---------------------------------------
 ADMONITIONS = ("info", "note", "warning", "tip")
@@ -98,6 +106,8 @@ def preprocess_storage(storage_html: str) -> Tuple[str, List[str]]:
         return f"{PLACEHOLDER_PREFIX}{len(replacements) - 1}{_PLACEHOLDER_END}"
 
     processed = _rewrite_task_lists(storage_html)
+    processed = _rewrite_ac_images(processed, replacements)
+    processed = _rewrite_ac_attachment_links(processed, replacements)
     processed = _MACRO_RE.sub(_replace, processed)
     return processed, replacements
 
@@ -229,3 +239,253 @@ UNKNOWN_MACRO_RE = re.compile(
     r"<!--/confluence-macro-->",
     re.DOTALL,
 )
+
+
+# ---------------------------------------------------------------------------
+# Images & attachment-aware links
+# ---------------------------------------------------------------------------
+
+# Default subdirectory (relative to the Markdown file) where pulled
+# attachments are stored and where md_to_storage looks when deciding
+# whether a local image / link should become an ``<ri:attachment>``.
+ATTACHMENTS_DIRNAME = "attachments"
+
+# Marker comments used after Markdown image / link syntax to carry
+# extra information that has no native Markdown representation.  Kept
+# terse so they don't dominate the rendered file visually.
+_IMG_ATTR_COMMENT_RE = re.compile(
+    r"<!--\s*cm-image(?P<attrs>(?:\s+[a-zA-Z][\w-]*=\"[^\"]*\")*)\s*-->"
+)
+_ATTACHMENT_LINK_MARKER = "<!--cm-attachment-->"
+_ATTACHMENT_LINK_MARKER_RE = re.compile(r"<!--\s*cm-attachment\s*-->")
+
+# Matches a Confluence ``<ac:image>`` block and captures its attributes
+# and body so we can rewrite both ``<ri:attachment>`` and ``<ri:url>``
+# children.  HTML parsing is not safe here because lxml silently drops
+# the ``ri:*`` children due to the missing namespace declaration.
+_AC_IMAGE_RE = re.compile(
+    r"<ac:image\b(?P<attrs>[^>]*)>(?P<body>.*?)</ac:image>",
+    re.DOTALL | re.IGNORECASE,
+)
+_AC_IMAGE_SELF_CLOSE_RE = re.compile(
+    r"<ac:image\b(?P<attrs>[^>]*)/\s*>",
+    re.IGNORECASE,
+)
+# Attachment-backed links: ``<ac:link><ri:attachment/><ac:plain-text-link-body>…``
+_AC_LINK_ATTACHMENT_RE = re.compile(
+    r"<ac:link\b(?P<attrs>[^>]*)>(?P<body>.*?)</ac:link>",
+    re.DOTALL | re.IGNORECASE,
+)
+_RI_ATTACHMENT_RE = re.compile(
+    r"<ri:attachment\b(?P<attrs>[^>]*)/?\s*>(?:\s*</ri:attachment>)?",
+    re.DOTALL | re.IGNORECASE,
+)
+_RI_URL_RE = re.compile(
+    r"<ri:url\b(?P<attrs>[^>]*)/?\s*>(?:\s*</ri:url>)?",
+    re.DOTALL | re.IGNORECASE,
+)
+_AC_PLAIN_LINK_BODY_RE = re.compile(
+    r"<ac:plain-text-link-body\b[^>]*>\s*(?:<!\[CDATA\[)?(?P<text>.*?)(?:\]\]>)?\s*"
+    r"</ac:plain-text-link-body>",
+    re.DOTALL | re.IGNORECASE,
+)
+_AC_LINK_BODY_RE = re.compile(
+    r"<ac:link-body\b[^>]*>(?P<text>.*?)</ac:link-body>",
+    re.DOTALL | re.IGNORECASE,
+)
+
+_XML_ATTR_RE = re.compile(r"([a-zA-Z_][\w:-]*)\s*=\s*\"([^\"]*)\"")
+
+# Characters that are unsafe or awkward on common filesystems.  We keep
+# Unicode letters/numbers for readability and only strip what would
+# actually cause problems.
+_UNSAFE_ATTACHMENT_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+
+
+def _parse_xml_attrs(blob: str) -> List[Tuple[str, str]]:
+    """Return a list of ``(name, html-unescaped value)`` tuples."""
+
+    return [(m.group(1), html.unescape(m.group(2))) for m in _XML_ATTR_RE.finditer(blob or "")]
+
+
+def _attr_dict(blob: str) -> "dict[str, str]":
+    return {name: value for name, value in _parse_xml_attrs(blob)}
+
+
+def sanitize_attachment_filename(filename: str, fallback: str = "attachment") -> str:
+    """Return a filesystem-safe basename for ``filename``.
+
+    Path components are stripped (so ``../secret`` can never escape the
+    configured attachments directory), control characters and the usual
+    Windows-reserved characters are replaced with spaces.
+    """
+
+    if not filename:
+        return fallback
+    # Only ever keep the base name – no directories, absolute or relative.
+    base = os.path.basename(filename.replace("\\", "/"))
+    cleaned = _UNSAFE_ATTACHMENT_RE.sub(" ", base)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    cleaned = cleaned.lstrip(".")  # avoid accidental hidden files
+    return cleaned or fallback
+
+
+def _format_image_attrs(attrs: "dict[str, str]") -> str:
+    """Serialise preserved image attributes as an HTML comment.
+
+    Only a conservative allow-list is kept – the attributes that actually
+    survive on the Confluence side and whose values are short and safe.
+    """
+
+    preserved: List[Tuple[str, str]] = []
+    allow = (
+        "ac:alt",
+        "ac:title",
+        "ac:width",
+        "ac:height",
+        "ac:align",
+        "ac:layout",
+        "ac:thumbnail",
+        "ac:border",
+        "ac:class",
+        "ac:style",
+    )
+    for key in allow:
+        if key in attrs and attrs[key]:
+            short = key.split(":", 1)[1]
+            # Quote-escape the value for safe HTML-comment storage.
+            value = attrs[key].replace('"', "'")
+            preserved.append((short, value))
+    if not preserved:
+        return ""
+    rendered = " ".join(f'{k}="{html.escape(v, quote=True)}"' for k, v in preserved)
+    return f"<!--cm-image {rendered}-->"
+
+
+def parse_image_attr_comment(comment: str) -> "dict[str, str]":
+    """Parse the ``<!--cm-image …-->`` marker back into a dict.
+
+    Returns an empty dict when the comment is malformed or missing.
+    """
+
+    match = _IMG_ATTR_COMMENT_RE.match(comment or "")
+    if not match:
+        return {}
+    return {k: html.unescape(v) for k, v in _XML_ATTR_RE.findall(match.group("attrs") or "")}
+
+
+# Public regex re-used by md_to_storage to detect and strip the marker.
+IMAGE_ATTR_COMMENT_RE = _IMG_ATTR_COMMENT_RE
+ATTACHMENT_LINK_MARKER = _ATTACHMENT_LINK_MARKER
+ATTACHMENT_LINK_MARKER_RE = _ATTACHMENT_LINK_MARKER_RE
+
+
+def _rewrite_ac_images(storage_html: str, replacements: List[str]) -> str:
+    """Convert ``<ac:image>`` elements to Markdown image tokens."""
+
+    def _render(attrs_blob: str, body: str) -> str:
+        attrs = _attr_dict(attrs_blob)
+        alt = attrs.get("ac:alt") or attrs.get("ac:title") or ""
+        filename: str = ""
+        url: str = ""
+        attachment_match = _RI_ATTACHMENT_RE.search(body or "")
+        if attachment_match:
+            a = _attr_dict(attachment_match.group("attrs"))
+            filename = a.get("ri:filename", "")
+        url_match = _RI_URL_RE.search(body or "")
+        if url_match:
+            u = _attr_dict(url_match.group("attrs"))
+            url = u.get("ri:value", "")
+
+        target: str
+        if filename:
+            safe = sanitize_attachment_filename(filename)
+            target = f"{ATTACHMENTS_DIRNAME}/{safe}"
+        elif url:
+            target = url
+        else:
+            # Unknown form – drop the element but keep a tiny placeholder
+            # so editors can notice the missing asset.
+            target = ""
+
+        alt_escaped = alt.replace("[", r"\[").replace("]", r"\]")
+        target_escaped = (target or "").replace("(", "%28").replace(")", "%29")
+        snippet = f"![{alt_escaped}]({target_escaped})"
+        marker = _format_image_attrs(attrs)
+        if marker:
+            snippet += marker
+        return snippet
+
+    def _replace_pair(match: "re.Match[str]") -> str:
+        snippet = _render(match.group("attrs") or "", match.group("body") or "")
+        replacements.append(snippet)
+        return f"{PLACEHOLDER_PREFIX}{len(replacements) - 1}{_PLACEHOLDER_END}"
+
+    def _replace_self(match: "re.Match[str]") -> str:
+        snippet = _render(match.group("attrs") or "", "")
+        replacements.append(snippet)
+        return f"{PLACEHOLDER_PREFIX}{len(replacements) - 1}{_PLACEHOLDER_END}"
+
+    processed = _AC_IMAGE_RE.sub(_replace_pair, storage_html)
+    processed = _AC_IMAGE_SELF_CLOSE_RE.sub(_replace_self, processed)
+    return processed
+
+
+def _rewrite_ac_attachment_links(storage_html: str, replacements: List[str]) -> str:
+    """Convert ``<ac:link><ri:attachment/>…</ac:link>`` to Markdown links."""
+
+    def _render(match: "re.Match[str]") -> str:
+        body = match.group("body") or ""
+        attachment_match = _RI_ATTACHMENT_RE.search(body)
+        if not attachment_match:
+            # Not an attachment link – leave the element untouched so the
+            # downstream parser can deal with page / user / anchor links.
+            return match.group(0)
+        a = _attr_dict(attachment_match.group("attrs"))
+        filename = a.get("ri:filename", "")
+        if not filename:
+            return match.group(0)
+
+        text_match = _AC_PLAIN_LINK_BODY_RE.search(body) or _AC_LINK_BODY_RE.search(body)
+        # Inner body may contain markup – strip tags for the Markdown label.
+        if text_match:
+            raw_text = re.sub(r"<[^>]+>", "", text_match.group("text") or "")
+            label = html.unescape(raw_text).strip()
+        else:
+            label = ""
+        if not label:
+            label = filename
+
+        safe = sanitize_attachment_filename(filename)
+        target = f"{ATTACHMENTS_DIRNAME}/{safe}"
+        label_escaped = label.replace("[", r"\[").replace("]", r"\]")
+        target_escaped = target.replace("(", "%28").replace(")", "%29")
+        snippet = f"[{label_escaped}]({target_escaped}){_ATTACHMENT_LINK_MARKER}"
+        replacements.append(snippet)
+        return f"{PLACEHOLDER_PREFIX}{len(replacements) - 1}{_PLACEHOLDER_END}"
+
+    return _AC_LINK_ATTACHMENT_RE.sub(_render, storage_html)
+
+
+# ---------------------------------------------------------------------------
+# Helpers shared with the service layer
+# ---------------------------------------------------------------------------
+
+
+# Match ``<ri:attachment ri:filename="…"/>`` anywhere in raw storage XML,
+# regardless of whether it's inside an image, link, or a macro body.
+RI_FILENAME_RE = re.compile(
+    r"<ri:attachment\b[^>]*\bri:filename\s*=\s*\"(?P<name>[^\"]+)\"",
+    re.IGNORECASE,
+)
+
+
+def iter_referenced_filenames(storage_html: str) -> Iterable[str]:
+    """Yield unique ``ri:filename`` values referenced in the page body."""
+
+    seen: Set[str] = set()
+    for match in RI_FILENAME_RE.finditer(storage_html or ""):
+        raw = html.unescape(match.group("name"))
+        if raw and raw not in seen:
+            seen.add(raw)
+            yield raw
