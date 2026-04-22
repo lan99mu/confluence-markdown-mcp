@@ -328,3 +328,121 @@ def test_push_rejects_unsafe_style_declarations():
     assert "font-size" not in storage
     assert "javascript" not in storage
     assert "url(" not in storage
+
+
+# --- drawio / iframe embeds via html-bobswift macro ---------------------
+
+
+def test_pull_html_bobswift_macro_exposes_iframe():
+    """``html-bobswift`` wraps raw HTML in a CDATA block.  On pull the
+    body must be spliced back out so a contained ``<iframe>`` becomes a
+    Markdown iframe line.
+    """
+
+    storage = (
+        '<p>Before.</p>'
+        '<ac:structured-macro ac:name="html-bobswift">'
+        '<ac:plain-text-body><![CDATA[<iframe '
+        'src="https://viewer.diagrams.net/?edit=_blank#G123" '
+        'width="800" height="600" frameborder="0"></iframe>]]>'
+        '</ac:plain-text-body>'
+        "</ac:structured-macro>"
+        "<p>After.</p>"
+    )
+    md = storage_to_markdown(storage)
+    assert "Before." in md and "After." in md
+    assert '<iframe' in md
+    assert 'src="https://viewer.diagrams.net/?edit=_blank#G123"' in md
+    assert 'width="800"' in md
+    assert 'height="600"' in md
+
+
+def test_push_iframe_wraps_in_html_bobswift():
+    md = (
+        'Hello.\n\n'
+        '<iframe src="https://viewer.diagrams.net/#G123" '
+        'width="800" height="600" frameborder="0"></iframe>\n\n'
+        'World.\n'
+    )
+    storage = markdown_to_storage(md)
+    assert 'ac:name="html-bobswift"' in storage
+    assert '<ac:plain-text-body><![CDATA[<iframe' in storage
+    assert 'src="https://viewer.diagrams.net/#G123"' in storage
+    assert "<p>Hello.</p>" in storage
+    assert "<p>World.</p>" in storage
+
+
+def test_iframe_full_round_trip():
+    storage = (
+        '<ac:structured-macro ac:name="html-bobswift">'
+        '<ac:plain-text-body><![CDATA[<iframe '
+        'src="https://viewer.diagrams.net/?edit=_blank#Gabc" '
+        'width="800" height="600" frameborder="0" allowfullscreen></iframe>]]>'
+        '</ac:plain-text-body>'
+        "</ac:structured-macro>"
+    )
+    md = storage_to_markdown(storage)
+    back = markdown_to_storage(md)
+    assert 'ac:name="html-bobswift"' in back
+    assert 'src="https://viewer.diagrams.net/?edit=_blank#Gabc"' in back
+    assert 'width="800"' in back
+    assert 'height="600"' in back
+    assert 'frameborder="0"' in back
+    assert 'allowfullscreen' in back
+
+
+def test_iframe_rejects_unsafe_src_on_pull():
+    storage = '<p>hi</p><iframe src="javascript:alert(1)"></iframe>'
+    md = storage_to_markdown(storage)
+    # Iframe is dropped entirely – never leaks ``javascript:``.
+    assert "javascript" not in md
+    assert "<iframe" not in md
+    assert "hi" in md
+
+
+def test_iframe_rejects_unsafe_src_on_push():
+    md = '<iframe src="javascript:alert(1)"></iframe>\n'
+    storage = markdown_to_storage(md)
+    assert "javascript" not in storage
+    # No html-bobswift wrapper should be emitted for a dropped iframe.
+    assert "html-bobswift" not in storage
+
+
+def test_iframe_strips_non_allowlisted_attributes():
+    """Attributes outside the allow-list (e.g. ``onload``) must not
+    survive the push conversion as live attributes.
+    """
+
+    md = (
+        '<iframe src="https://example.com/d" onload="alert(1)" '
+        'sandbox="allow-scripts" width="200"></iframe>\n'
+    )
+    storage = markdown_to_storage(md)
+    # The iframe must be wrapped in html-bobswift (proving the line was
+    # recognised as an iframe block) …
+    assert "html-bobswift" in storage
+    assert 'src="https://example.com/d"' in storage
+    assert 'width="200"' in storage
+    # … and the non-allow-listed attributes must be dropped.
+    assert "onload" not in storage
+    assert "sandbox" not in storage
+    assert "alert" not in storage
+
+
+def test_bare_iframe_pull_round_trip():
+    """An ``<iframe>`` directly in the storage XHTML (no wrapping
+    macro) must also survive a pull + push round trip.  On push we
+    always wrap in ``html-bobswift`` so Confluence renders the embed.
+    """
+
+    storage = (
+        '<p>Before.</p>'
+        '<iframe src="https://example.com/diagram" width="400" '
+        'height="300"></iframe>'
+        "<p>After.</p>"
+    )
+    md = storage_to_markdown(storage)
+    assert '<iframe src="https://example.com/diagram"' in md
+    back = markdown_to_storage(md)
+    assert 'ac:name="html-bobswift"' in back
+    assert 'src="https://example.com/diagram"' in back

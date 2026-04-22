@@ -9,6 +9,8 @@ version: 0.2.0
 This skill teaches an MCP-capable assistant how to work with the
 `confluence-markdown-mcp` server.
 
+> 🇨🇳 中文版本见 [`skill.zh-CN.md`](skill.zh-CN.md)。
+
 ## When to use
 
 Invoke this skill whenever the user wants to:
@@ -86,10 +88,21 @@ converting to Markdown, and reverses the process on upload:
 | `<span style="color: …; background-color: …">` | Same `<span>` verbatim |
 | `<p style="text-align: left/right/center/justify">` | Same `<p>` verbatim |
 | Inline `<u>`, `<s>`/`<del>`, `<sub>`, `<sup>`, `<br>` | Same tag verbatim |
+| `html` / `html-bobswift` macro (embedded `<iframe>`, e.g. drawio / diagrams.net) | Raw HTML body is unwrapped into a Markdown `<iframe …></iframe>` line; push re-wraps it in `html-bobswift` automatically |
 | Any other `<ac:structured-macro>` | HTML comment token that round-trips |
 
 Because unknown macros are preserved as comments, **do not delete them** in
 an edit unless the user explicitly asks to remove that block.
+
+### drawio / iframe embeds
+
+Confluence renders drawio / diagrams.net diagrams through an `<iframe>`
+inside an `html-bobswift` (or `html`) user macro. On pull the iframe is
+unwrapped onto a single Markdown line; on push the server re-wraps it in
+the same macro so Confluence can render it. Iframe `src` attributes are
+restricted to `http` / `https` URLs and non-allow-listed attributes
+(`onload`, `srcdoc`, `sandbox`, …) are dropped so unsafe embeds cannot
+leak through a round-trip.
 
 ## Error handling
 

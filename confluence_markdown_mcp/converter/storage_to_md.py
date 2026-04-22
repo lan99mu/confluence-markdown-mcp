@@ -199,6 +199,15 @@ class _StorageParser(HTMLParser):
                 self._row_is_header = True
             return
 
+        if tag == "iframe":
+            rendered = _render_iframe(attrs_dict)
+            if rendered:
+                self._emit(f"\n\n{rendered}\n\n")
+            # Skip any (unexpected) children – an ``<iframe>`` is supposed
+            # to be empty, and we've already serialised it ourselves.
+            self._skip_depth = 1
+            return
+
         if tag == "blockquote":
             # Open a blockquote segment – we append "> " at line starts via
             # a simple scheme: push a marker that handle_data uses.  Since
@@ -439,6 +448,97 @@ def _build_span_style(style: str) -> str:
     if bg:
         parts.append(f"background-color: {bg}")
     return "; ".join(parts)
+
+
+# -------------------------------------------------------------- iframes
+# Diagrams (drawio / diagrams.net), Confluence native diagrams and other
+# embeds are frequently rendered as ``<iframe>`` elements.  Markdown has
+# no native syntax for them, but we preserve the iframe verbatim so that
+# a pull → edit → push cycle does not lose the embed.  Attributes are
+# filtered to an allow-list and the ``src`` URL is sanitised to ``http``
+# / ``https`` only to avoid smuggling ``javascript:`` or other dangerous
+# schemes into the output.
+
+_IFRAME_SAFE_ATTRS = (
+    "src",
+    "width",
+    "height",
+    "frameborder",
+    "allowfullscreen",
+    "allow",
+    "title",
+    "name",
+    "scrolling",
+    "style",
+)
+
+# Accept absolute ``http`` / ``https`` URLs and protocol-relative ``//host``
+# URLs – the latter are frequently used by embedded viewers.  Anything
+# else (notably ``javascript:``, ``data:`` or ``file:``) is dropped.
+_SAFE_IFRAME_SRC_RE = re.compile(r"(?i)^(?:https?:)?//[^\s\"'<>]+$|^https?://[^\s\"'<>]+$")
+
+
+def _render_iframe(attrs: dict) -> str:
+    """Serialise an ``<iframe>`` element into a Markdown-safe HTML string.
+
+    Returns an empty string when the ``src`` attribute is missing or uses
+    an unsafe URL scheme – the iframe is then silently dropped.
+    """
+
+    src = (attrs.get("src") or "").strip()
+    if not src or not _SAFE_IFRAME_SRC_RE.match(src):
+        return ""
+
+    rendered_attrs: List[str] = [f'src="{_escape_attr(src)}"']
+    for name in _IFRAME_SAFE_ATTRS:
+        if name == "src":
+            continue
+        if name not in attrs:
+            continue
+        value = attrs.get(name)
+        if name == "style":
+            sanitised_style = _build_span_style(value or "")
+            align = _extract_align(value or "")
+            pieces: List[str] = []
+            if sanitised_style:
+                pieces.append(sanitised_style)
+            if align:
+                pieces.append(f"text-align: {align}")
+            if not pieces:
+                continue
+            value = "; ".join(pieces)
+        elif name in ("width", "height"):
+            # Only accept positive integers or CSS lengths – strip units to
+            # digits / ``px`` / ``%`` to keep the output tidy.
+            if value is None:
+                continue
+            stripped = str(value).strip()
+            if not re.match(r"^\d+(?:\.\d+)?(?:px|%)?$", stripped):
+                continue
+            value = stripped
+        elif name == "allowfullscreen":
+            # Boolean attribute – HTMLParser yields ``None`` for bare
+            # attributes; normalise to ``allowfullscreen``.
+            rendered_attrs.append("allowfullscreen")
+            continue
+        else:
+            if value is None:
+                continue
+            value = str(value)
+        rendered_attrs.append(f'{name}="{_escape_attr(value)}"')
+
+    return f"<iframe {' '.join(rendered_attrs)}></iframe>"
+
+
+def _escape_attr(value: str) -> str:
+    """Minimal quote-aware escaper for attribute values."""
+
+    return (
+        value.replace("&", "&amp;")
+        .replace('"', "&quot;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
 
 
 def storage_to_markdown(storage_html: str) -> str:

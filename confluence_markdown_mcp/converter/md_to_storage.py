@@ -38,6 +38,14 @@ _HEADING_RE = re.compile(r"^(?P<hashes>#{1,6})\s+(?P<text>.*)$")
 _UL_RE = re.compile(r"^(?P<indent>\s*)[-*]\s+(?P<text>.*)$")
 _OL_RE = re.compile(r"^(?P<indent>\s*)\d+\.\s+(?P<text>.*)$")
 _TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$")
+_IFRAME_BLOCK_RE = re.compile(
+    r"^<iframe\b[^>]*>\s*</iframe>\s*$|^<iframe\b[^>]*/\s*>\s*$",
+    re.IGNORECASE,
+)
+_IFRAME_ATTR_RE = re.compile(
+    r'(?P<name>[a-zA-Z_:][-a-zA-Z0-9_:.]*)'
+    r'(?:\s*=\s*(?:"(?P<dq>[^"]*)"|\'(?P<sq>[^\']*)\'|(?P<bare>[^\s"\'>]+)))?'
+)
 
 
 def markdown_to_storage(markdown_text: str) -> str:
@@ -112,6 +120,10 @@ class _BlockRenderer:
 
             if self._looks_like_table(self.i):
                 self._render_table()
+                continue
+
+            if _IFRAME_BLOCK_RE.match(line.strip()):
+                self._render_iframe_block()
                 continue
 
             # Fallback: paragraph gathered from consecutive non-blank lines.
@@ -206,6 +218,30 @@ class _BlockRenderer:
         )
         _ = start  # kept for readability
 
+    def _render_iframe_block(self) -> None:
+        """Emit an ``<iframe>`` block wrapped in an ``html-bobswift`` macro.
+
+        Raw ``<iframe>`` markup is not part of the Confluence storage
+        format – embeds such as drawio / diagrams.net are wrapped in a
+        user macro (``html`` or ``html-bobswift``) whose
+        ``<ac:plain-text-body>`` CDATA contains the literal HTML.  We
+        sanitise the iframe first, then wrap the result so the page
+        renders on Confluence after a push.  If the iframe has no safe
+        ``src`` we drop it rather than pushing a broken element.
+        """
+
+        line = self.lines[self.i].strip()
+        self.i += 1
+        rendered = _serialise_iframe_from_markup(line)
+        if not rendered:
+            return
+        safe_body = rendered.replace("]]>", "]]]]><![CDATA[>")
+        self.out.append(
+            '<ac:structured-macro ac:name="html-bobswift">'
+            f"<ac:plain-text-body><![CDATA[{safe_body}]]></ac:plain-text-body>"
+            "</ac:structured-macro>"
+        )
+
     def _render_paragraph(self) -> None:
         buf: List[str] = []
         while (
@@ -217,6 +253,7 @@ class _BlockRenderer:
             and not _UL_RE.match(self.lines[self.i])
             and not _OL_RE.match(self.lines[self.i])
             and not self._looks_like_table(self.i)
+            and not _IFRAME_BLOCK_RE.match(self.lines[self.i].strip())
         ):
             buf.append(self.lines[self.i])
             self.i += 1
@@ -537,3 +574,95 @@ def _render_inline(text: str) -> str:
 
     escaped = re.sub(r"\0HTML(\d+)\0", _restore_passthrough, escaped)
     return escaped
+
+
+# -------------------------------------------------------------- iframes
+# An ``<iframe>`` line survives a pull → edit → push cycle by being
+# emitted verbatim.  The serialiser below parses the tag with a small
+# attribute regex (rather than ``html.parser``) so that the original
+# Markdown source doesn't need to be fed through a full HTML tree, and
+# it reuses ``storage_to_md`` helpers to sanitise ``src`` and ``style``.
+
+_IFRAME_SAFE_ATTRS = (
+    "src",
+    "width",
+    "height",
+    "frameborder",
+    "allowfullscreen",
+    "allow",
+    "title",
+    "name",
+    "scrolling",
+    "style",
+)
+_SAFE_IFRAME_SRC_RE = re.compile(r"(?i)^(?:https?:)?//[^\s\"'<>]+$|^https?://[^\s\"'<>]+$")
+_SAFE_DIMENSION_RE = re.compile(r"^\d+(?:\.\d+)?(?:px|%)?$")
+
+
+def _parse_iframe_attrs(markup: str) -> dict:
+    """Parse attributes out of an ``<iframe ...>`` opening tag."""
+
+    # Strip the leading ``<iframe`` and trailing ``>`` (or ``/>``).
+    match = re.match(r"(?is)^<iframe\b(?P<body>.*?)/?\s*>\s*(?:</iframe>)?\s*$", markup)
+    if not match:
+        return {}
+    attrs: dict = {}
+    for attr_match in _IFRAME_ATTR_RE.finditer(match.group("body")):
+        name = attr_match.group("name").lower()
+        value = (
+            attr_match.group("dq")
+            if attr_match.group("dq") is not None
+            else attr_match.group("sq")
+            if attr_match.group("sq") is not None
+            else attr_match.group("bare")
+        )
+        if value is None:
+            # Bare boolean attribute.
+            attrs[name] = ""
+        else:
+            attrs[name] = html.unescape(value)
+    return attrs
+
+
+def _serialise_iframe_from_markup(markup: str) -> str:
+    """Serialise a Markdown ``<iframe ...>`` line into safe storage XHTML.
+
+    Returns ``""`` if the iframe has no safe ``src`` – in that case the
+    block is silently dropped rather than emitted in a broken form.
+    """
+
+    # Local import to avoid a module-level cycle with ``storage_to_md``.
+    from .storage_to_md import _build_span_style, _extract_align
+
+    attrs = _parse_iframe_attrs(markup)
+    src = (attrs.get("src") or "").strip()
+    if not src or not _SAFE_IFRAME_SRC_RE.match(src):
+        return ""
+
+    rendered: List[str] = [f'src="{html.escape(src, quote=True)}"']
+    for name in _IFRAME_SAFE_ATTRS:
+        if name == "src" or name not in attrs:
+            continue
+        value = attrs[name]
+        if name == "allowfullscreen":
+            rendered.append("allowfullscreen")
+            continue
+        if name == "style":
+            sanitised = _build_span_style(value)
+            align = _extract_align(value)
+            parts: List[str] = []
+            if sanitised:
+                parts.append(sanitised)
+            if align:
+                parts.append(f"text-align: {align}")
+            if not parts:
+                continue
+            value = "; ".join(parts)
+        elif name in ("width", "height"):
+            stripped = value.strip()
+            if not _SAFE_DIMENSION_RE.match(stripped):
+                continue
+            value = stripped
+        rendered.append(f'{name}="{html.escape(value, quote=True)}"')
+
+    return f"<iframe {' '.join(rendered)}></iframe>"
