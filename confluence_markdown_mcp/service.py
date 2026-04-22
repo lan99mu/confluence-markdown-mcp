@@ -198,8 +198,8 @@ class ConfluenceService:
             return []
 
         remote = self._attachment_index(page_id)
-        target_dir = os.path.join(os.path.dirname(os.path.abspath(markdown_path)),
-                                  attachments_dirname)
+        md_dir = os.path.dirname(os.path.abspath(markdown_path))
+        target_dir = os.path.join(md_dir, attachments_dirname)
 
         results: List[AttachmentInfo] = []
         seen: Set[str] = set()
