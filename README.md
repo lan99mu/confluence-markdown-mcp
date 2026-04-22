@@ -73,6 +73,7 @@ python -m confluence_markdown_mcp --help
 | `CONFLUENCE_API_TOKEN` | ✅ | [API token](https://id.atlassian.com/manage-profile/security/api-tokens) |
 | `CONFLUENCE_TIMEOUT` | ❎ | HTTP 超时秒数，默认 `30` |
 | `CONFLUENCE_MARKDOWN_DIR` | ❎ | `pull` 时相对路径所依赖的默认目录 |
+| `CONFLUENCE_IS_CLOUD` | ❎ | 是否为 Confluence Cloud；默认 `true`。设为 `false` 时走 Server/Data Center 的 `/rest/api`；Cloud 走 `/wiki/rest/api` |
 
 ```bash
 export CONFLUENCE_BASE_URL="https://example.atlassian.net"

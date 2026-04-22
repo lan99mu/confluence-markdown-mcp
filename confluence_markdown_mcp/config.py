@@ -12,6 +12,26 @@ ENV_EMAIL = "CONFLUENCE_EMAIL"
 ENV_API_TOKEN = "CONFLUENCE_API_TOKEN"
 ENV_TIMEOUT = "CONFLUENCE_TIMEOUT"
 ENV_DEFAULT_DIR = "CONFLUENCE_MARKDOWN_DIR"
+ENV_IS_CLOUD = "CONFLUENCE_IS_CLOUD"
+
+
+def _parse_bool(raw: Optional[str], default: bool) -> bool:
+    """Parse a human-friendly boolean string.
+
+    Accepts ``true/false``, ``1/0``, ``yes/no``, ``on/off`` (case-insensitive).
+    Falls back to ``default`` when ``raw`` is ``None`` or empty/unrecognised.
+    """
+
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    if not value:
+        return default
+    if value in {"true", "1", "yes", "y", "on"}:
+        return True
+    if value in {"false", "0", "no", "n", "off"}:
+        return False
+    return default
 
 
 @dataclass(frozen=True)
@@ -26,6 +46,7 @@ class Settings:
     api_token: str
     timeout: float = 30.0
     markdown_dir: Optional[str] = None
+    is_cloud: bool = True
 
     def validate(self) -> None:
         missing = [
@@ -58,6 +79,7 @@ def load_settings() -> Settings:
         api_token=os.getenv(ENV_API_TOKEN, "").strip(),
         timeout=timeout,
         markdown_dir=(os.getenv(ENV_DEFAULT_DIR, "").strip() or None),
+        is_cloud=_parse_bool(os.getenv(ENV_IS_CLOUD), default=True),
     )
     settings.validate()
     return settings
