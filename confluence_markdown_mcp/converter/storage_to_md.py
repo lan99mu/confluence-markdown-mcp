@@ -30,6 +30,10 @@ class _StorageParser(HTMLParser):
         self._ol_counters: List[int] = []
         self._pre_depth = 0
         self._skip_depth = 0  # ignore children of dropped elements
+        # Stack of closing strings to emit when a styled wrapper (e.g. a
+        # coloured <span>) ends.  ``""`` means the tag carried no style and
+        # should be a no-op on close.
+        self._style_stack: List[str] = []
 
         # Table state.
         self._in_table = False
@@ -43,6 +47,11 @@ class _StorageParser(HTMLParser):
     def result(self) -> str:
         text = "".join(self._out)
         text = re.sub(r"[ \t]+\n", "\n", text)
+        # Drop list markers that carry no content (``-``, ``1.`` alone on a
+        # line, optionally indented).  They come from empty Confluence
+        # placeholders such as ``<ul><li></li><li></li></ul>`` in template
+        # scaffolding.
+        text = re.sub(r"(?m)^[ \t]*(?:[-*]|\d+\.)[ \t]*$\n?", "", text)
         text = re.sub(r"\n{3,}", "\n\n", text)
         return text.strip() + "\n"
 
@@ -106,6 +115,26 @@ class _StorageParser(HTMLParser):
         if tag == "a":
             self._emit("[")
             self._link_stack.append(attrs_dict.get("href", ""))
+            return
+
+        if tag == "span":
+            color = _extract_color(attrs_dict.get("style", ""))
+            if color:
+                self._emit(f'<span style="color: {color}">')
+                self._style_stack.append("</span>")
+            else:
+                self._style_stack.append("")
+            return
+
+        if tag == "font":
+            color = attrs_dict.get("color", "").strip()
+            if not color:
+                color = _extract_color(attrs_dict.get("style", ""))
+            if color:
+                self._emit(f'<span style="color: {color}">')
+                self._style_stack.append("</span>")
+            else:
+                self._style_stack.append("")
             return
 
         if tag == "img":
@@ -192,6 +221,12 @@ class _StorageParser(HTMLParser):
             href = self._link_stack.pop() if self._link_stack else ""
             self._emit(f"]({href})")
             return
+        if tag in ("span", "font"):
+            if self._style_stack:
+                closer = self._style_stack.pop()
+                if closer:
+                    self._emit(closer)
+            return
         if tag in ("ul", "ol"):
             if self._list_stack and self._list_stack[-1] == tag:
                 self._list_stack.pop()
@@ -264,6 +299,44 @@ def _normalise_cell(text: str) -> str:
     text = re.sub(r"\s+", " ", text).strip()
     # Pipes and newlines must not leak into a Markdown table row.
     return text.replace("|", "\\|")
+
+
+_COLOR_RE = re.compile(r"(?i)color\s*:\s*([^;]+?)\s*(?:;|$)")
+
+# Allow-list of safe CSS colour values.  Restricting to these formats
+# prevents CSS injection via crafted ``style`` attributes (e.g. smuggling
+# additional declarations or ``expression()`` payloads into the markdown
+# output).
+_SAFE_COLOR_RE = re.compile(
+    r"(?ix)"
+    r"^(?:"
+    r"  \#[0-9a-f]{3,8}"                                   # hex #rgb / #rrggbb(aa)
+    r"| rgb\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*\)"   # rgb(r,g,b)
+    r"| rgba\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*(?:\d*\.)?\d+\s*\)"
+    r"| hsl\(\s*\d{1,3}\s*,\s*\d{1,3}%\s*,\s*\d{1,3}%\s*\)"
+    r"| hsla\(\s*\d{1,3}\s*,\s*\d{1,3}%\s*,\s*\d{1,3}%\s*,\s*(?:\d*\.)?\d+\s*\)"
+    r"| [a-z]{3,30}"                                       # CSS named colour
+    r")$"
+)
+
+
+def _extract_color(style: str) -> str:
+    """Return the CSS ``color`` value from a ``style`` attribute, if any.
+
+    Only returns values that match a strict allow-list of CSS colour
+    formats (hex / rgb / rgba / hsl / hsla / named).  Anything else is
+    discarded to avoid CSS injection via crafted ``style`` attributes.
+    """
+
+    if not style:
+        return ""
+    match = _COLOR_RE.search(style)
+    if not match:
+        return ""
+    color = match.group(1).strip()
+    if not _SAFE_COLOR_RE.match(color):
+        return ""
+    return color
 
 
 def storage_to_markdown(storage_html: str) -> str:

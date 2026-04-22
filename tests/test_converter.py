@@ -98,3 +98,66 @@ def test_inline_code_not_mangled_by_bold():
     storage = markdown_to_storage(md)
     assert "<code>*x*</code>" in storage
     assert "<strong>bold</strong>" in storage
+
+
+def test_color_span_round_trip():
+    storage = (
+        '<p>Hello <span style="color: rgb(255,0,0)">red</span> '
+        'and <span style="color: #00ff00">green</span>!</p>'
+    )
+    md = storage_to_markdown(storage)
+    assert '<span style="color: rgb(255,0,0)">red</span>' in md
+    assert '<span style="color: #00ff00">green</span>' in md
+
+    back = markdown_to_storage(md)
+    assert '<span style="color: rgb(255,0,0)">red</span>' in back
+    assert '<span style="color: #00ff00">green</span>' in back
+
+
+def test_color_span_rejects_css_injection():
+    """Unsafe CSS colour payloads must not leak into the output."""
+
+    cases = [
+        ("expression(alert(1))", "expression"),
+        ("red{}/*", "{"),
+        ("url(x)", "url"),
+        ("rgb(1,2,3); xss", "xss"),
+    ]
+    for payload, forbidden in cases:
+        storage = f'<p><span style="color: {payload}">x</span></p>'
+        md = storage_to_markdown(storage)
+        assert forbidden not in md
+        assert markdown_to_storage(md).find(forbidden) == -1
+
+
+def test_task_list_converted_to_task_markers():
+    storage = (
+        "<p>任务：</p>"
+        "<ac:task-list>"
+        "<ac:task><ac:task-id>1</ac:task-id>"
+        "<ac:task-status>incomplete</ac:task-status>"
+        "<ac:task-body>写代码</ac:task-body></ac:task>"
+        "<ac:task><ac:task-id>2</ac:task-id>"
+        "<ac:task-status>complete</ac:task-status>"
+        "<ac:task-body>写测试</ac:task-body></ac:task>"
+        "</ac:task-list>"
+    )
+    md = storage_to_markdown(storage)
+    assert "- [ ] 写代码" in md
+    assert "- [x] 写测试" in md
+    # No leaking of ``<ac:task-id>`` / ``<ac:task-status>`` text.
+    assert "incomplete" not in md
+    assert "complete" not in md
+
+
+def test_empty_placeholder_scaffolding_is_stripped():
+    storage = (
+        "<p>Before.</p>"
+        "<p></p><ul><li></li><li></li></ul><p></p>"
+        "<p>After.</p>"
+    )
+    md = storage_to_markdown(storage)
+    assert "Before." in md and "After." in md
+    # No stray empty list markers on their own line.
+    for line in md.splitlines():
+        assert line.strip() not in {"-", "*"}
