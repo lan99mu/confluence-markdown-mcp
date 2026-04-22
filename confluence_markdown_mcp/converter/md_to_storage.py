@@ -221,8 +221,22 @@ class _BlockRenderer:
             buf.append(self.lines[self.i])
             self.i += 1
         text = " ".join(s.strip() for s in buf).strip()
-        if text:
-            self.out.append(f"<p>{_render_inline(text)}</p>")
+        if not text:
+            return
+        # Preserve a paragraph that is entirely wrapped in an alignment
+        # wrapper (``<p style="text-align: X">…</p>``) – the same form
+        # produced by ``storage_to_markdown`` when it encounters aligned
+        # paragraphs in Confluence.
+        align_match = _ALIGN_P_RE.match(text)
+        if align_match:
+            align = align_match.group("align").lower()
+            if align in _SAFE_ALIGN_VALUES:
+                inner = _render_inline(align_match.group("body").strip())
+                self.out.append(
+                    f'<p style="text-align: {align}">{inner}</p>'
+                )
+                return
+        self.out.append(f"<p>{_render_inline(text)}</p>")
 
     # -------------------------------------------------------------- tables
     def _looks_like_table(self, idx: int) -> bool:
@@ -240,6 +254,9 @@ class _BlockRenderer:
 _collect_list_end_index = [0]
 
 
+_TASK_MARKER_RE = re.compile(r"^\[(?P<mark>[ xX])\]\s+(?P<body>.*)$")
+
+
 def _collect_list(
     lines: List[str],
     start: int,
@@ -251,6 +268,7 @@ def _collect_list(
     """
 
     items: List[str] = []
+    item_raw_texts: List[str] = []
     ordered_marker = _OL_RE.match(lines[start])
     tag = "ol" if ordered_marker else "ul"
     i = start
@@ -286,11 +304,40 @@ def _collect_list(
             i = new_i
             continue
 
-        text = _render_inline(match.group("text").strip())
+        raw_text = match.group("text").strip()
+        item_raw_texts.append(raw_text)
+        text = _render_inline(raw_text)
         items.append(f"<li>{text}</li>")
         i += 1
 
     _collect_list_end_index[0] = i
+
+    # If every item in an unordered list starts with a task marker
+    # (``[ ]`` or ``[x]``) emit a Confluence task-list macro so checkboxes
+    # round-trip back to the native widget instead of being turned into
+    # literal ``[ ]`` text inside a plain bullet list.
+    if (
+        tag == "ul"
+        and item_raw_texts
+        and all(_TASK_MARKER_RE.match(t) for t in item_raw_texts)
+    ):
+        tasks_xml: List[str] = []
+        for idx, raw in enumerate(item_raw_texts, start=1):
+            marker_match = _TASK_MARKER_RE.match(raw)
+            assert marker_match  # guaranteed by the ``all(...)`` above
+            mark = marker_match.group("mark")
+            body_md = marker_match.group("body").strip()
+            body_html = _render_inline(body_md) if body_md else ""
+            status = "complete" if mark.lower() == "x" else "incomplete"
+            tasks_xml.append(
+                "<ac:task>"
+                f"<ac:task-id>{idx}</ac:task-id>"
+                f"<ac:task-status>{status}</ac:task-status>"
+                f"<ac:task-body>{body_html}</ac:task-body>"
+                "</ac:task>"
+            )
+        return "<ac:task-list>" + "".join(tasks_xml) + "</ac:task-list>", i
+
     return f"<{tag}>" + "".join(items) + f"</{tag}>", i
 
 
@@ -331,15 +378,24 @@ _BOLD_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
 _ITALIC_RE = re.compile(r"\*(.+?)\*", re.DOTALL)
 _LINK_RE = re.compile(r"\[(?P<label>[^\]]+)\]\((?P<url>[^)\s]+)\)")
 _IMAGE_RE = re.compile(r"!\[(?P<alt>[^\]]*)\]\((?P<src>[^)\s]+)\)")
-# Inline colour wrappers produced by ``storage_to_markdown``.  They must
-# round-trip back to the storage format verbatim so colours survive a
-# pull → edit → push cycle.  The colour value is validated against a
-# strict allow-list at substitution time so crafted markdown cannot inject
-# arbitrary CSS into the storage XML.
-_COLOR_SPAN_RE = re.compile(
-    r'<span\s+style="color:\s*(?P<color>[^";<>]+)"\s*>(?P<body>.*?)</span>',
+# Inline ``<span style="…">`` wrappers produced by ``storage_to_markdown``
+# (or hand-written by the user).  They must round-trip back to the storage
+# format so colour / background-colour highlights survive a
+# pull → edit → push cycle.  Each declaration is validated against a strict
+# allow-list so crafted markdown cannot inject arbitrary CSS into the
+# storage XML.
+_STYLE_SPAN_RE = re.compile(
+    r'<span\s+style="(?P<style>[^"<>]*)"\s*>(?P<body>.*?)</span>',
     re.DOTALL | re.IGNORECASE,
 )
+# Block-level alignment wrapper produced by ``storage_to_markdown`` for
+# aligned paragraphs.  Matched only when it occupies the whole paragraph.
+_ALIGN_P_RE = re.compile(
+    r'^<p\s+style="text-align:\s*(?P<align>left|right|center|justify)\s*"\s*>'
+    r"(?P<body>.*)</p>\s*$",
+    re.DOTALL | re.IGNORECASE,
+)
+_SAFE_ALIGN_VALUES = {"left", "right", "center", "justify"}
 _SAFE_COLOR_RE = re.compile(
     r"(?ix)"
     r"^(?:"
@@ -351,6 +407,40 @@ _SAFE_COLOR_RE = re.compile(
     r"| [a-z]{3,30}"
     r")$"
 )
+
+# Inline HTML tags that we let pass through verbatim instead of escaping.
+# These are exactly the tags Confluence renders as-is in the storage
+# format, so forwarding them lets users write simple rich formatting in
+# Markdown (underline, strike-through, sub/sup, line break) and have it
+# survive a push.
+_INLINE_PASSTHROUGH_TAGS = ("u", "s", "strike", "del", "ins", "sub", "sup")
+_INLINE_PASSTHROUGH_RE = re.compile(
+    r"</?(?:" + "|".join(_INLINE_PASSTHROUGH_TAGS) + r")\s*/?>",
+    re.IGNORECASE,
+)
+_BR_RE = re.compile(r"<br\s*/?\s*>", re.IGNORECASE)
+
+
+def _sanitise_inline_style(style: str) -> str:
+    """Return a sanitised ``style`` attribute value, keeping only safe
+    ``color`` / ``background-color`` declarations.  Anything else (including
+    unknown properties or unsafe colour payloads) is silently dropped so a
+    crafted span cannot smuggle arbitrary CSS into the storage XML.
+    """
+
+    parts: List[str] = []
+    for decl in style.split(";"):
+        if ":" not in decl:
+            continue
+        prop, _, value = decl.partition(":")
+        prop = prop.strip().lower()
+        value = value.strip()
+        if prop not in ("color", "background-color"):
+            continue
+        if not _SAFE_COLOR_RE.match(value):
+            continue
+        parts.append(f"{prop}: {value}")
+    return "; ".join(parts)
 
 
 def _render_inline(text: str) -> str:
@@ -370,23 +460,33 @@ def _render_inline(text: str) -> str:
 
     text = _INLINE_CODE_RE.sub(_stash_code, text)
 
-    # Stash inline colour spans so their ``<span>`` wrappers survive HTML
-    # escaping and are emitted verbatim into the storage XML.
+    # Stash inline style spans (colour / background-colour) so their
+    # ``<span>`` wrappers survive HTML escaping and are emitted verbatim
+    # into the storage XML.
     spans: List[str] = []
 
-    def _stash_color_span(match: "re.Match[str]") -> str:
-        color = match.group("color").strip()
-        if not _SAFE_COLOR_RE.match(color):
-            # Unrecognised/unsafe colour – fall through so the literal
-            # ``<span>`` text is HTML-escaped like any other input.
+    def _stash_style_span(match: "re.Match[str]") -> str:
+        style = _sanitise_inline_style(match.group("style"))
+        if not style:
+            # Nothing safe left – fall through so the literal tag text is
+            # HTML-escaped like any other input.
             return match.group(0)
         body = _render_inline(match.group("body"))
-        spans.append(
-            f'<span style="color: {html.escape(color, quote=True)}">{body}</span>'
-        )
+        spans.append(f'<span style="{html.escape(style, quote=True)}">{body}</span>')
         return f"\0SPAN{len(spans) - 1}\0"
 
-    text = _COLOR_SPAN_RE.sub(_stash_color_span, text)
+    text = _STYLE_SPAN_RE.sub(_stash_style_span, text)
+
+    # Stash safe inline passthrough tags (<u>, <s>, <sub>, <sup>, …) and
+    # line breaks so they survive HTML escaping.
+    passthrough: List[str] = []
+
+    def _stash_passthrough(match: "re.Match[str]") -> str:
+        passthrough.append(match.group(0).lower())
+        return f"\0HTML{len(passthrough) - 1}\0"
+
+    text = _INLINE_PASSTHROUGH_RE.sub(_stash_passthrough, text)
+    text = _BR_RE.sub(_stash_passthrough, text)
 
     # Stash images and links before HTML-escaping so their URLs survive.
     links: List[str] = []
@@ -427,4 +527,13 @@ def _render_inline(text: str) -> str:
         return spans[idx]
 
     escaped = re.sub(r"\0SPAN(\d+)\0", _restore_span, escaped)
+
+    def _restore_passthrough(match: "re.Match[str]") -> str:
+        idx = int(match.group(1))
+        tag = passthrough[idx]
+        if tag.startswith("<br"):
+            return "<br/>"
+        return tag
+
+    escaped = re.sub(r"\0HTML(\d+)\0", _restore_passthrough, escaped)
     return escaped

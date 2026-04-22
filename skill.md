@@ -81,7 +81,11 @@ converting to Markdown, and reverses the process on upload:
 | `info` / `note` / `warning` / `tip` | `> [!INFO]` blockquote admonition |
 | `<table>` with `<th>/<td>` | Pipe table (first row as header) |
 | `<ul>/<ol>/<li>` (nested) | `-` / `1.` list (2-space indent) |
+| `<ac:task-list>` with `<ac:task>` | `- [ ]` / `- [x]` task items |
 | `<a>` / `<img>` | `[text](url)` / `![alt](src)` |
+| `<span style="color: …; background-color: …">` | Same `<span>` verbatim |
+| `<p style="text-align: left/right/center/justify">` | Same `<p>` verbatim |
+| Inline `<u>`, `<s>`/`<del>`, `<sub>`, `<sup>`, `<br>` | Same tag verbatim |
 | Any other `<ac:structured-macro>` | HTML comment token that round-trips |
 
 Because unknown macros are preserved as comments, **do not delete them** in
