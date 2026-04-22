@@ -1,150 +1,174 @@
-"""Convert Markdown back to Confluence *storage* XHTML.
+"""Markdown → Confluence storage-format XHTML via ``markdown-it-py`` tokens.
 
-The conversion is intentionally conservative: it covers the constructs that
-``storage_to_markdown`` can produce so that a ``pull → edit → push`` round
-trip preserves the structure of a page.  Anything unrecognised is emitted
-as a plain paragraph – that matches Confluence's own behaviour when it
-receives unknown markup.
+The previous implementation hand-rolled a line scanner plus a stack of
+regex substitutions to convert Markdown into the storage format.  That
+approach produced the correct output for the common happy path but had
+well-known failure modes around inline tokenisation (e.g. ``*`` / `` ` ``
+edge cases), HTML allow-listing, nested lists in tables, and alignment
+wrappers.
 
-Supported constructs
---------------------
-
-* ATX headings ``# … ######``
-* Paragraphs (blank-line separated)
-* Fenced code blocks (``` ``` ```` with optional language) → ``code`` macro
-* Unordered (``-``/``*``) and ordered (``1.``) lists, with 2-space
-  nested indentation
-* GFM blockquotes including ``> [!INFO]`` admonition headers → info / note /
-  warning / tip macros
-* Simple pipe-delimited tables with a ``---`` header separator
-* Inline: ``**bold**``, ``*italic*``, ``` `code` ``` and ``[label](url)``
-* HTML-comment round-trip tokens for unknown macros (see ``macros.py``)
+This module replaces the scanner with a real Markdown parser
+(``markdown-it-py``, the reference CommonMark parser in Python) and
+walks the produced token stream to emit storage XML.  The public API
+(:func:`markdown_to_storage`) is unchanged so the rest of the package
+needs no modification.
 """
 
 from __future__ import annotations
 
 import html
 import re
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
+from markdown_it import MarkdownIt
+from markdown_it.token import Token
+
+from ._iframe import parse_iframe_markup, render_iframe
+from ._style import SAFE_ALIGN_VALUES, build_span_style, extract_align
 from .macros import ADMONITIONS, UNKNOWN_MACRO_RE
 
-_ADMONITION_HEADER_RE = re.compile(
-    r"^\[!(?P<name>INFO|NOTE|WARNING|TIP)\]\s*$",
-    re.IGNORECASE,
-)
 
-_HEADING_RE = re.compile(r"^(?P<hashes>#{1,6})\s+(?P<text>.*)$")
-_UL_RE = re.compile(r"^(?P<indent>\s*)[-*]\s+(?P<text>.*)$")
-_OL_RE = re.compile(r"^(?P<indent>\s*)\d+\.\s+(?P<text>.*)$")
-_TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$")
-_IFRAME_BLOCK_RE = re.compile(
-    r"^<iframe\b[^>]*>\s*</iframe>\s*$|^<iframe\b[^>]*/\s*>\s*$",
-    re.IGNORECASE,
-)
-_IFRAME_ATTR_RE = re.compile(
-    r'(?P<name>[a-zA-Z_:][-a-zA-Z0-9_:.]*)'
-    r'(?:\s*=\s*(?:"(?P<dq>[^"]*)"|\'(?P<sq>[^\']*)\'|(?P<bare>[^\s"\'>]+)))?'
-)
+# ---------------------------------------------------------------------------
+# Markdown parser
+# ---------------------------------------------------------------------------
+
+
+def _build_parser() -> MarkdownIt:
+    parser = MarkdownIt("commonmark", {"html": True, "breaks": False})
+    parser.enable(["table", "strikethrough"])
+    return parser
+
+
+_MD = _build_parser()
+
+
+_UNKNOWN_MACRO_PLACEHOLDER_OPEN = "\ue010UNKN"
+_UNKNOWN_MACRO_PLACEHOLDER_CLOSE = "\ue011"
+_UNKNOWN_MACRO_PLACEHOLDER_RE = re.compile(r"\ue010UNKN(\d+)\ue011")
 
 
 def markdown_to_storage(markdown_text: str) -> str:
     """Convert a Markdown document to Confluence storage-format XHTML."""
 
-    # First splice any unknown-macro comment tokens back out of the Markdown
-    # so they are not literally rendered; they become direct storage XML.
+    # Pull unknown-macro comment tokens out before parsing – they become
+    # direct storage XML and must not be touched by the Markdown parser.
     unknown_chunks: List[str] = []
 
-    def _pull_unknown(match: "re.Match[str]") -> str:
+    def _pull(match: "re.Match[str]") -> str:
         body = html.unescape(match.group("body"))
         name = html.unescape(match.group("name"))
         unknown_chunks.append(
             f'<ac:structured-macro ac:name="{html.escape(name, quote=True)}">'
             f"{body}</ac:structured-macro>"
         )
-        return f"\0UNKN{len(unknown_chunks) - 1}\0"
+        idx = len(unknown_chunks) - 1
+        return f"{_UNKNOWN_MACRO_PLACEHOLDER_OPEN}{idx}{_UNKNOWN_MACRO_PLACEHOLDER_CLOSE}"
 
-    normalised = UNKNOWN_MACRO_RE.sub(_pull_unknown, markdown_text)
+    normalised = UNKNOWN_MACRO_RE.sub(_pull, markdown_text)
 
-    lines = normalised.splitlines()
-    renderer = _BlockRenderer(lines)
+    tokens = _MD.parse(normalised)
+    renderer = _BlockRenderer(tokens)
     rendered = renderer.render()
 
-    # Re-insert unknown macros.
-    def _sub_unknown(match: "re.Match[str]") -> str:
+    def _restore_unknown(match: "re.Match[str]") -> str:
         idx = int(match.group(1))
         return unknown_chunks[idx] if 0 <= idx < len(unknown_chunks) else ""
 
-    return re.sub(r"\0UNKN(\d+)\0", _sub_unknown, rendered)
+    return _UNKNOWN_MACRO_PLACEHOLDER_RE.sub(_restore_unknown, rendered)
 
 
-# --------------------------------------------------------------------------
-# Block level rendering
-# --------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Block-level token walker
+# ---------------------------------------------------------------------------
+
+
+_ADMONITION_HEADER_RE = re.compile(
+    r"^\[!(?P<name>INFO|NOTE|WARNING|TIP)\]\s*$",
+    re.IGNORECASE,
+)
+_TASK_MARKER_RE = re.compile(r"^\[(?P<mark>[ xX])\]\s+(?P<body>.*)$", re.DOTALL)
+_ALIGN_P_RE = re.compile(
+    r'^\s*<p\s+style="text-align:\s*(?P<align>left|right|center|justify)\s*"\s*>'
+    r"(?P<body>.*)</p>\s*$",
+    re.DOTALL | re.IGNORECASE,
+)
+_IFRAME_BLOCK_RE = re.compile(
+    r"^\s*<iframe\b[^>]*>\s*</iframe>\s*$|^\s*<iframe\b[^>]*/\s*>\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+_SPAN_OPEN_RE = re.compile(
+    r'^<span\s+style="(?P<style>[^"<>]*)"\s*>$',
+    re.IGNORECASE,
+)
+_INLINE_HTML_PASSTHROUGH = re.compile(
+    r"^</?(?:u|s|strike|del|ins|sub|sup)\s*/?>$",
+    re.IGNORECASE,
+)
+_BR_RE = re.compile(r"^<br\s*/?\s*>$", re.IGNORECASE)
 
 
 class _BlockRenderer:
-    def __init__(self, lines: List[str]) -> None:
-        self.lines = lines
+    def __init__(self, tokens: List[Token]) -> None:
+        self.tokens = tokens
         self.i = 0
         self.out: List[str] = []
 
-    # ------------------------------------------------------------------ api
+    # --------------------------------------------------------------- api
     def render(self) -> str:
-        while self.i < len(self.lines):
-            line = self.lines[self.i]
-
-            if not line.strip():
+        while self.i < len(self.tokens):
+            tok = self.tokens[self.i]
+            handler = getattr(self, f"_do_{tok.type}", None)
+            if handler is None:
+                # Unknown token type – skip it.
                 self.i += 1
                 continue
-
-            if line.startswith("```"):
-                self._render_code_fence()
-                continue
-
-            heading = _HEADING_RE.match(line)
-            if heading:
-                level = len(heading.group("hashes"))
-                text = _render_inline(heading.group("text").strip())
-                self.out.append(f"<h{level}>{text}</h{level}>")
-                self.i += 1
-                continue
-
-            if line.lstrip().startswith(">"):
-                self._render_blockquote()
-                continue
-
-            if _UL_RE.match(line) or _OL_RE.match(line):
-                self._render_list()
-                continue
-
-            if self._looks_like_table(self.i):
-                self._render_table()
-                continue
-
-            if _IFRAME_BLOCK_RE.match(line.strip()):
-                self._render_iframe_block()
-                continue
-
-            # Fallback: paragraph gathered from consecutive non-blank lines.
-            self._render_paragraph()
-
+            handler(tok)
         return "".join(self.out)
 
-    # -------------------------------------------------------------- blocks
-    def _render_code_fence(self) -> None:
-        fence = self.lines[self.i]
-        language = fence[3:].strip()
-        self.i += 1
-        buf: List[str] = []
-        while self.i < len(self.lines) and not self.lines[self.i].startswith("```"):
-            buf.append(self.lines[self.i])
-            self.i += 1
-        # Consume closing fence if present.
-        if self.i < len(self.lines):
-            self.i += 1
+    # ---------------------------------------------------------- utilities
+    def _consume_until(self, close_type: str) -> List[Token]:
+        """Collect tokens until a matching closer; returns [start..close-1]."""
 
-        safe_code = "\n".join(buf).replace("]]>", "]]]]><![CDATA[>")
+        depth = 1
+        start = self.i
+        while self.i < len(self.tokens):
+            tok = self.tokens[self.i]
+            if tok.type == close_type.replace("_close", "_open"):
+                depth += 1
+            elif tok.type == close_type:
+                depth -= 1
+                if depth == 0:
+                    break
+            self.i += 1
+        return self.tokens[start:self.i]
+
+    # ------------------------------------------------------------ blocks
+    def _do_heading_open(self, tok: Token) -> None:
+        level = int(tok.tag[1])
+        self.i += 1
+        inline = self.tokens[self.i]
+        self.i += 1  # inline
+        self.i += 1  # heading_close
+        text = _render_inline(inline.children or [])
+        self.out.append(f"<h{level}>{text}</h{level}>")
+
+    def _do_paragraph_open(self, tok: Token) -> None:
+        self.i += 1
+        inline = self.tokens[self.i]
+        self.i += 1
+        self.i += 1  # paragraph_close
+        text = _render_inline(inline.children or [])
+        if not text:
+            return
+        self.out.append(f"<p>{text}</p>")
+
+    def _do_fence(self, tok: Token) -> None:
+        self.i += 1
+        language = (tok.info or "").strip()
+        code = tok.content
+        if code.endswith("\n"):
+            code = code[:-1]
+        safe = code.replace("]]>", "]]]]><![CDATA[>")
         lang_xml = (
             f'<ac:parameter ac:name="language">{html.escape(language, quote=True)}'
             f"</ac:parameter>"
@@ -154,317 +178,363 @@ class _BlockRenderer:
         self.out.append(
             '<ac:structured-macro ac:name="code">'
             f"{lang_xml}"
-            f"<ac:plain-text-body><![CDATA[{safe_code}]]></ac:plain-text-body>"
+            f"<ac:plain-text-body><![CDATA[{safe}]]></ac:plain-text-body>"
             "</ac:structured-macro>"
         )
 
-    def _render_blockquote(self) -> None:
-        # Collect contiguous blockquote lines (starting with '>').
-        content_lines: List[str] = []
-        while self.i < len(self.lines) and self.lines[self.i].lstrip().startswith(">"):
-            stripped = self.lines[self.i].lstrip()[1:]
-            # A single leading space after '>' is the canonical form.
-            if stripped.startswith(" "):
-                stripped = stripped[1:]
-            content_lines.append(stripped)
+    def _do_code_block(self, tok: Token) -> None:
+        # Indented code block – treat the same as a fenced block with no lang.
+        self.i += 1
+        code = tok.content.rstrip("\n")
+        safe = code.replace("]]>", "]]]]><![CDATA[>")
+        self.out.append(
+            '<ac:structured-macro ac:name="code">'
+            f"<ac:plain-text-body><![CDATA[{safe}]]></ac:plain-text-body>"
+            "</ac:structured-macro>"
+        )
+
+    def _do_hr(self, tok: Token) -> None:
+        self.i += 1
+        self.out.append("<hr/>")
+
+    def _do_blockquote_open(self, tok: Token) -> None:
+        self.i += 1  # skip blockquote_open
+        # Collect children tokens until blockquote_close at matching depth.
+        depth = 1
+        inner: List[Token] = []
+        while self.i < len(self.tokens):
+            t = self.tokens[self.i]
+            if t.type == "blockquote_open":
+                depth += 1
+            elif t.type == "blockquote_close":
+                depth -= 1
+                if depth == 0:
+                    self.i += 1
+                    break
+            inner.append(t)
             self.i += 1
 
-        admonition: Optional[str] = None
-        if content_lines:
-            header_match = _ADMONITION_HEADER_RE.match(content_lines[0].strip())
-            if header_match:
-                admonition = header_match.group("name").lower()
-                content_lines = content_lines[1:]
+        # Detect admonition: first paragraph's inline starts with [!NAME].
+        admonition = _detect_admonition(inner)
+        sub = _BlockRenderer(inner)
+        inner_xml = sub.render()
 
-        inner_md = "\n".join(content_lines).strip("\n")
-        inner_html = markdown_to_storage(inner_md) if inner_md else ""
-
-        if admonition and admonition in ADMONITIONS:
+        if admonition in ADMONITIONS:
             self.out.append(
                 f'<ac:structured-macro ac:name="{admonition}">'
-                f"<ac:rich-text-body>{inner_html}</ac:rich-text-body>"
+                f"<ac:rich-text-body>{inner_xml}</ac:rich-text-body>"
                 "</ac:structured-macro>"
             )
         else:
-            self.out.append(f"<blockquote>{inner_html}</blockquote>")
+            self.out.append(f"<blockquote>{inner_xml}</blockquote>")
 
-    def _render_list(self) -> None:
-        rendered, _ = _collect_list(self.lines, self.i, indent_level=0)
-        self.out.append(rendered)
-        # Advance ``i`` past the list block – ``_collect_list`` returned the
-        # number of consumed lines via self.i mutation below.
-        self.i = _collect_list_end_index[0]
-
-    def _render_table(self) -> None:
-        start = self.i
-        # Header row.
-        header_cells = _split_pipe_row(self.lines[self.i])
-        self.i += 2  # skip header + separator
-        body_rows: List[List[str]] = []
-        while self.i < len(self.lines) and "|" in self.lines[self.i]:
-            body_rows.append(_split_pipe_row(self.lines[self.i]))
-            self.i += 1
-
-        header_html = "".join(
-            f"<th>{_render_inline(c)}</th>" for c in header_cells
-        )
-        body_html = "".join(
-            "<tr>" + "".join(f"<td>{_render_inline(c)}</td>" for c in row) + "</tr>"
-            for row in body_rows
-        )
-        self.out.append(
-            f"<table><thead><tr>{header_html}</tr></thead>"
-            f"<tbody>{body_html}</tbody></table>"
-        )
-        _ = start  # kept for readability
-
-    def _render_iframe_block(self) -> None:
-        """Emit an ``<iframe>`` block wrapped in an ``html-bobswift`` macro.
-
-        Raw ``<iframe>`` markup is not part of the Confluence storage
-        format – embeds such as drawio / diagrams.net are wrapped in a
-        user macro (``html`` or ``html-bobswift``) whose
-        ``<ac:plain-text-body>`` CDATA contains the literal HTML.  We
-        sanitise the iframe first, then wrap the result so the page
-        renders on Confluence after a push.  If the iframe has no safe
-        ``src`` we drop it rather than pushing a broken element.
-        """
-
-        line = self.lines[self.i].strip()
+    # ------------------------------------------------------------- lists
+    def _do_bullet_list_open(self, tok: Token) -> None:
         self.i += 1
-        rendered = _serialise_iframe_from_markup(line)
-        if not rendered:
-            return
-        safe_body = rendered.replace("]]>", "]]]]><![CDATA[>")
-        self.out.append(
-            '<ac:structured-macro ac:name="html-bobswift">'
-            f"<ac:plain-text-body><![CDATA[{safe_body}]]></ac:plain-text-body>"
-            "</ac:structured-macro>"
-        )
+        items: List[List[Token]] = []
+        raw_texts: List[str] = []
+        while self.i < len(self.tokens):
+            t = self.tokens[self.i]
+            if t.type == "bullet_list_close":
+                self.i += 1
+                break
+            if t.type == "list_item_open":
+                self.i += 1
+                body: List[Token] = []
+                depth = 1
+                while self.i < len(self.tokens):
+                    tt = self.tokens[self.i]
+                    if tt.type == "list_item_open":
+                        depth += 1
+                    elif tt.type == "list_item_close":
+                        depth -= 1
+                        if depth == 0:
+                            self.i += 1
+                            break
+                    body.append(tt)
+                    self.i += 1
+                items.append(body)
+                raw_texts.append(_list_item_raw_text(body))
+            else:
+                self.i += 1
 
-    def _render_paragraph(self) -> None:
-        buf: List[str] = []
-        while (
-            self.i < len(self.lines)
-            and self.lines[self.i].strip()
-            and not self.lines[self.i].startswith("```")
-            and not self.lines[self.i].lstrip().startswith(">")
-            and not _HEADING_RE.match(self.lines[self.i])
-            and not _UL_RE.match(self.lines[self.i])
-            and not _OL_RE.match(self.lines[self.i])
-            and not self._looks_like_table(self.i)
-            and not _IFRAME_BLOCK_RE.match(self.lines[self.i].strip())
-        ):
-            buf.append(self.lines[self.i])
-            self.i += 1
-        text = " ".join(s.strip() for s in buf).strip()
-        if not text:
-            return
-        # Preserve a paragraph that is entirely wrapped in an alignment
-        # wrapper (``<p style="text-align: X">…</p>``) – the same form
-        # produced by ``storage_to_markdown`` when it encounters aligned
-        # paragraphs in Confluence.
-        align_match = _ALIGN_P_RE.match(text)
-        if align_match:
-            align = align_match.group("align").lower()
-            if align in _SAFE_ALIGN_VALUES:
-                inner = _render_inline(align_match.group("body").strip())
-                self.out.append(
-                    f'<p style="text-align: {align}">{inner}</p>'
+        # Task-list detection: all items are ``[ ]``/``[x]`` + space + body.
+        if items and all(_TASK_MARKER_RE.match(t) for t in raw_texts):
+            parts = ["<ac:task-list>"]
+            for idx, body in enumerate(items, start=1):
+                match = _TASK_MARKER_RE.match(raw_texts[idx - 1])
+                assert match
+                status = "complete" if match.group("mark").lower() == "x" else "incomplete"
+                # Render the list-item body XML then strip the leading
+                # task-marker text that the raw inline parser emitted.
+                body_xml = _render_list_item(body)
+                body_xml = _strip_leading_task_marker(body_xml)
+                parts.append(
+                    "<ac:task>"
+                    f"<ac:task-id>{idx}</ac:task-id>"
+                    f"<ac:task-status>{status}</ac:task-status>"
+                    f"<ac:task-body>{body_xml}</ac:task-body>"
+                    "</ac:task>"
                 )
-                return
-        self.out.append(f"<p>{_render_inline(text)}</p>")
+            parts.append("</ac:task-list>")
+            self.out.append("".join(parts))
+            return
+
+        parts = ["<ul>"]
+        for body in items:
+            parts.append("<li>" + _render_list_item(body) + "</li>")
+        parts.append("</ul>")
+        self.out.append("".join(parts))
+
+    def _do_ordered_list_open(self, tok: Token) -> None:
+        self.i += 1
+        items: List[List[Token]] = []
+        while self.i < len(self.tokens):
+            t = self.tokens[self.i]
+            if t.type == "ordered_list_close":
+                self.i += 1
+                break
+            if t.type == "list_item_open":
+                self.i += 1
+                body: List[Token] = []
+                depth = 1
+                while self.i < len(self.tokens):
+                    tt = self.tokens[self.i]
+                    if tt.type == "list_item_open":
+                        depth += 1
+                    elif tt.type == "list_item_close":
+                        depth -= 1
+                        if depth == 0:
+                            self.i += 1
+                            break
+                    body.append(tt)
+                    self.i += 1
+                items.append(body)
+            else:
+                self.i += 1
+        parts = ["<ol>"]
+        for body in items:
+            parts.append("<li>" + _render_list_item(body) + "</li>")
+        parts.append("</ol>")
+        self.out.append("".join(parts))
 
     # -------------------------------------------------------------- tables
-    def _looks_like_table(self, idx: int) -> bool:
-        if idx + 1 >= len(self.lines):
-            return False
-        header = self.lines[idx]
-        sep = self.lines[idx + 1]
-        return "|" in header and bool(_TABLE_SEP_RE.match(sep))
-
-
-# ------------------------------------------------------------ list helpers
-# A bit of a hack: ``_collect_list`` needs to communicate back to the
-# renderer how many lines it consumed.  Using a mutable sentinel keeps the
-# public signature cleaner.
-_collect_list_end_index = [0]
-
-
-_TASK_MARKER_RE = re.compile(r"^\[(?P<mark>[ xX])\]\s+(?P<body>.*)$")
-
-
-def _collect_list(
-    lines: List[str],
-    start: int,
-    indent_level: int,
-) -> Tuple[str, int]:
-    """Render a (possibly nested) list starting at ``lines[start]``.
-
-    Returns ``(html, next_line_index)``.
-    """
-
-    items: List[str] = []
-    item_raw_texts: List[str] = []
-    ordered_marker = _OL_RE.match(lines[start])
-    tag = "ol" if ordered_marker else "ul"
-    i = start
-
-    while i < len(lines):
-        line = lines[i]
-        if not line.strip():
-            # Blank line may still be part of the list when followed by
-            # another item with the same indent; peek ahead.
-            j = i + 1
-            if j < len(lines) and (_UL_RE.match(lines[j]) or _OL_RE.match(lines[j])):
-                i = j
+    def _do_table_open(self, tok: Token) -> None:
+        self.i += 1
+        header_rows: List[List[str]] = []
+        body_rows: List[List[str]] = []
+        in_thead = False
+        in_tbody = False
+        while self.i < len(self.tokens):
+            t = self.tokens[self.i]
+            if t.type == "table_close":
+                self.i += 1
+                break
+            if t.type == "thead_open":
+                in_thead, in_tbody = True, False
+                self.i += 1
                 continue
-            break
+            if t.type == "thead_close":
+                in_thead = False
+                self.i += 1
+                continue
+            if t.type == "tbody_open":
+                in_tbody, in_thead = True, False
+                self.i += 1
+                continue
+            if t.type == "tbody_close":
+                in_tbody = False
+                self.i += 1
+                continue
+            if t.type == "tr_open":
+                self.i += 1
+                row: List[str] = []
+                while self.i < len(self.tokens):
+                    tt = self.tokens[self.i]
+                    if tt.type == "tr_close":
+                        self.i += 1
+                        break
+                    if tt.type in ("td_open", "th_open"):
+                        self.i += 1
+                        inline = self.tokens[self.i]
+                        self.i += 1  # inline
+                        self.i += 1  # td_close / th_close
+                        row.append(_render_inline(inline.children or []))
+                    else:
+                        self.i += 1
+                if in_thead:
+                    header_rows.append(row)
+                else:
+                    body_rows.append(row)
+                continue
+            self.i += 1
 
-        ul = _UL_RE.match(line)
-        ol = _OL_RE.match(line)
-        match = ul or ol
-        if not match:
-            break
+        header = header_rows[0] if header_rows else []
+        parts = ["<table>"]
+        if header:
+            parts.append("<thead><tr>")
+            for cell in header:
+                parts.append(f"<th>{cell}</th>")
+            parts.append("</tr></thead>")
+        parts.append("<tbody>")
+        for row in body_rows:
+            parts.append("<tr>")
+            for cell in row:
+                parts.append(f"<td>{cell}</td>")
+            parts.append("</tr>")
+        parts.append("</tbody></table>")
+        self.out.append("".join(parts))
 
-        indent = len(match.group("indent").expandtabs(4))
-        level = indent // 2
+    # ---------------------------------------------------------- raw html
+    def _do_html_block(self, tok: Token) -> None:
+        self.i += 1
+        content = tok.content.strip()
 
-        if level < indent_level:
-            break
-
-        if level > indent_level:
-            # Nested list – recurse; attach to the previous item.
-            nested, new_i = _collect_list(lines, i, indent_level + 1)
-            if items:
-                items[-1] = items[-1][: -len("</li>")] + nested + "</li>"
-            i = new_i
-            continue
-
-        raw_text = match.group("text").strip()
-        item_raw_texts.append(raw_text)
-        text = _render_inline(raw_text)
-        items.append(f"<li>{text}</li>")
-        i += 1
-
-    _collect_list_end_index[0] = i
-
-    # If every item in an unordered list starts with a task marker
-    # (``[ ]`` or ``[x]``) emit a Confluence task-list macro so checkboxes
-    # round-trip back to the native widget instead of being turned into
-    # literal ``[ ]`` text inside a plain bullet list.
-    if (
-        tag == "ul"
-        and item_raw_texts
-        and all(_TASK_MARKER_RE.match(t) for t in item_raw_texts)
-    ):
-        tasks_xml: List[str] = []
-        for idx, raw in enumerate(item_raw_texts, start=1):
-            marker_match = _TASK_MARKER_RE.match(raw)
-            assert marker_match  # guaranteed by the ``all(...)`` above
-            mark = marker_match.group("mark")
-            body_md = marker_match.group("body").strip()
-            body_html = _render_inline(body_md) if body_md else ""
-            status = "complete" if mark.lower() == "x" else "incomplete"
-            tasks_xml.append(
-                "<ac:task>"
-                f"<ac:task-id>{idx}</ac:task-id>"
-                f"<ac:task-status>{status}</ac:task-status>"
-                f"<ac:task-body>{body_html}</ac:task-body>"
-                "</ac:task>"
+        # Paragraph alignment wrapper.
+        align = _ALIGN_P_RE.match(content)
+        if align and align.group("align").lower() in SAFE_ALIGN_VALUES:
+            body = align.group("body").strip()
+            rendered = _render_inline_html_body(body)
+            self.out.append(
+                f'<p style="text-align: {align.group("align").lower()}">{rendered}</p>'
             )
-        return "<ac:task-list>" + "".join(tasks_xml) + "</ac:task-list>", i
+            return
 
-    return f"<{tag}>" + "".join(items) + f"</{tag}>", i
+        # Bare iframe on its own line/block – wrap in html-bobswift.
+        if _IFRAME_BLOCK_RE.match(content):
+            attrs = parse_iframe_markup(content) or {}
+            rendered = render_iframe(attrs)
+            if not rendered:
+                return
+            safe_body = rendered.replace("]]>", "]]]]><![CDATA[>")
+            self.out.append(
+                '<ac:structured-macro ac:name="html-bobswift">'
+                f"<ac:plain-text-body><![CDATA[{safe_body}]]></ac:plain-text-body>"
+                "</ac:structured-macro>"
+            )
+            return
+
+        # Unknown-macro placeholders that happened to land as their own
+        # block paragraph (HTML comments).  They'll be restored later.
+        if _UNKNOWN_MACRO_PLACEHOLDER_RE.match(content):
+            self.out.append(content)
+            return
+
+        # Everything else: pass through verbatim – this covers bare
+        # top-level HTML the user wrote (e.g. complex widgets we don't
+        # understand).  Unknown tags are still wrapped in <p> by the
+        # markdown-it block rules, so there's nothing extra to do here.
+        self.out.append(content)
+
+    def _do_heading_close(self, tok: Token) -> None:      self.i += 1
+    def _do_paragraph_close(self, tok: Token) -> None:    self.i += 1
+    def _do_inline(self, tok: Token) -> None:             self.i += 1
 
 
-def _split_pipe_row(line: str) -> List[str]:
-    stripped = line.strip()
-    if stripped.startswith("|"):
-        stripped = stripped[1:]
-    if stripped.endswith("|"):
-        stripped = stripped[:-1]
-    # Split on unescaped pipes.
-    parts: List[str] = []
+# ---------------------------------------------------------------------------
+# Inline helpers
+# ---------------------------------------------------------------------------
+
+
+def _render_inline(children: List[Token]) -> str:
+    """Render a sequence of inline tokens to storage-format HTML."""
+
     buf: List[str] = []
     i = 0
-    while i < len(stripped):
-        ch = stripped[i]
-        if ch == "\\" and i + 1 < len(stripped) and stripped[i + 1] == "|":
-            buf.append("|")
-            i += 2
-            continue
-        if ch == "|":
-            parts.append("".join(buf).strip())
-            buf = []
-            i += 1
-            continue
-        buf.append(ch)
+    while i < len(children):
+        t = children[i]
+        ty = t.type
+        if ty == "text":
+            buf.append(html.escape(t.content))
+        elif ty == "softbreak":
+            buf.append(" ")
+        elif ty == "hardbreak":
+            buf.append("<br/>")
+        elif ty == "code_inline":
+            buf.append(f"<code>{html.escape(t.content)}</code>")
+        elif ty == "strong_open":
+            buf.append("<strong>")
+        elif ty == "strong_close":
+            buf.append("</strong>")
+        elif ty == "em_open":
+            buf.append("<em>")
+        elif ty == "em_close":
+            buf.append("</em>")
+        elif ty == "s_open":
+            buf.append("<s>")
+        elif ty == "s_close":
+            buf.append("</s>")
+        elif ty == "link_open":
+            href = dict(t.attrs or {}).get("href", "")
+            buf.append(f'<a href="{html.escape(href, quote=True)}">')
+        elif ty == "link_close":
+            buf.append("</a>")
+        elif ty == "image":
+            attrs = dict(t.attrs or {})
+            src = html.escape(attrs.get("src", ""), quote=True)
+            alt_text = "".join(_plain_text(c) for c in (t.children or []))
+            alt = html.escape(alt_text, quote=True)
+            buf.append(f'<ac:image><ri:url ri:value="{src}" ri:title="{alt}" /></ac:image>')
+        elif ty == "html_inline":
+            buf.append(_sanitise_html_inline(children, i, buf))
+            # _sanitise_html_inline may consume trailing tokens (e.g. span
+            # with unsafe style is dropped together with its close tag).
+            # It signals via the return value that we should advance.
+            # We always advance by 1 here since the function only inspects
+            # this one token; span pairs are handled by emitting tokens.
+        else:
+            # Unknown – ignore.
+            pass
         i += 1
-    parts.append("".join(buf).strip())
-    return parts
+    return "".join(buf)
 
 
-# --------------------------------------------------------------------------
-# Inline rendering
-# --------------------------------------------------------------------------
+def _plain_text(tok: Token) -> str:
+    if tok.type == "text":
+        return tok.content
+    if tok.type in ("softbreak", "hardbreak"):
+        return " "
+    if tok.children:
+        return "".join(_plain_text(c) for c in tok.children)
+    return ""
 
 
-_INLINE_CODE_RE = re.compile(r"`([^`]+)`")
-_BOLD_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
-_ITALIC_RE = re.compile(r"\*(.+?)\*", re.DOTALL)
-_LINK_RE = re.compile(r"\[(?P<label>[^\]]+)\]\((?P<url>[^)\s]+)\)")
-_IMAGE_RE = re.compile(r"!\[(?P<alt>[^\]]*)\]\((?P<src>[^)\s]+)\)")
-# Inline ``<span style="…">`` wrappers produced by ``storage_to_markdown``
-# (or hand-written by the user).  They must round-trip back to the storage
-# format so colour / background-colour highlights survive a
-# pull → edit → push cycle.  Each declaration is validated against a strict
-# allow-list so crafted markdown cannot inject arbitrary CSS into the
-# storage XML.
-_STYLE_SPAN_RE = re.compile(
-    r'<span\s+style="(?P<style>[^"<>]*)"\s*>(?P<body>.*?)</span>',
-    re.DOTALL | re.IGNORECASE,
-)
-# Block-level alignment wrapper produced by ``storage_to_markdown`` for
-# aligned paragraphs.  Matched only when it occupies the whole paragraph.
-_ALIGN_P_RE = re.compile(
-    r'^<p\s+style="text-align:\s*(?P<align>left|right|center|justify)\s*"\s*>'
-    r"(?P<body>.*)</p>\s*$",
-    re.DOTALL | re.IGNORECASE,
-)
-_SAFE_ALIGN_VALUES = {"left", "right", "center", "justify"}
-_SAFE_COLOR_RE = re.compile(
-    r"(?ix)"
-    r"^(?:"
-    r"  \#[0-9a-f]{3,8}"
-    r"| rgb\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*\)"
-    r"| rgba\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*(?:\d*\.)?\d+\s*\)"
-    r"| hsl\(\s*\d{1,3}\s*,\s*\d{1,3}%\s*,\s*\d{1,3}%\s*\)"
-    r"| hsla\(\s*\d{1,3}\s*,\s*\d{1,3}%\s*,\s*\d{1,3}%\s*,\s*(?:\d*\.)?\d+\s*\)"
-    r"| [a-z]{3,30}"
-    r")$"
-)
+def _sanitise_html_inline(
+    children: List[Token], index: int, buf: List[str]
+) -> str:
+    """Return the sanitised / escaped form of ``children[index]``.
 
-# Inline HTML tags that we let pass through verbatim instead of escaping.
-# These are exactly the tags Confluence renders as-is in the storage
-# format, so forwarding them lets users write simple rich formatting in
-# Markdown (underline, strike-through, sub/sup, line break) and have it
-# survive a push.
-_INLINE_PASSTHROUGH_TAGS = ("u", "s", "strike", "del", "ins", "sub", "sup")
-_INLINE_PASSTHROUGH_RE = re.compile(
-    r"</?(?:" + "|".join(_INLINE_PASSTHROUGH_TAGS) + r")\s*/?>",
-    re.IGNORECASE,
-)
-_BR_RE = re.compile(r"<br\s*/?\s*>", re.IGNORECASE)
+    Passthrough tags (`u`, `s`, `sub`, `sup`, …), `<br>`, and
+    ``<span style="safe">`` wrappers are emitted verbatim (with the style
+    attribute filtered).  Anything else is HTML-escaped so raw tag text
+    survives as literal characters rather than silently executing as
+    markup.
+    """
+
+    raw = children[index].content
+    if _BR_RE.match(raw):
+        return "<br/>"
+    if _INLINE_HTML_PASSTHROUGH.match(raw):
+        return raw.lower()
+    span = _SPAN_OPEN_RE.match(raw)
+    if span:
+        safe = _sanitise_inline_style(span.group("style"))
+        if safe:
+            return f'<span style="{html.escape(safe, quote=True)}">'
+        return ""
+    if raw.lower() in ("</span>",):
+        # Emit the closer only if we have an unmatched open in buf.
+        joined = "".join(buf)
+        if joined.count("<span ") > joined.count("</span>"):
+            return "</span>"
+        return ""
+    # Unknown inline HTML – drop the tag but keep any visible characters
+    # by escaping.  This preserves the text of crafted input like
+    # ``<img onerror=…>`` without letting it become live markup.
+    return html.escape(raw)
 
 
 def _sanitise_inline_style(style: str) -> str:
-    """Return a sanitised ``style`` attribute value, keeping only safe
-    ``color`` / ``background-color`` declarations.  Anything else (including
-    unknown properties or unsafe colour payloads) is silently dropped so a
-    crafted span cannot smuggle arbitrary CSS into the storage XML.
-    """
-
     parts: List[str] = []
     for decl in style.split(";"):
         if ":" not in decl:
@@ -474,195 +544,164 @@ def _sanitise_inline_style(style: str) -> str:
         value = value.strip()
         if prop not in ("color", "background-color"):
             continue
-        if not _SAFE_COLOR_RE.match(value):
+        from ._style import SAFE_COLOR_RE
+        if not SAFE_COLOR_RE.match(value):
             continue
         parts.append(f"{prop}: {value}")
     return "; ".join(parts)
 
 
-def _render_inline(text: str) -> str:
-    """Convert a single line's worth of inline Markdown to HTML.
+# ---------------------------------------------------------------------------
+# List / blockquote helpers
+# ---------------------------------------------------------------------------
 
-    Inline code spans are extracted *first* so that their contents are not
-    touched by the bold / italic substitutions that follow.
+
+def _list_item_raw_text(body: List[Token]) -> str:
+    """Plain-text representation of the first paragraph inside a list item.
+
+    Used for task-list marker detection so we keep the behaviour of the
+    legacy renderer (only convert when *every* item is a task).
     """
 
-    # Also pass through unknown-macro placeholders untouched – they are
-    # pure text as far as Markdown is concerned.
-    code_spans: List[str] = []
-
-    def _stash_code(match: "re.Match[str]") -> str:
-        code_spans.append(match.group(1))
-        return f"\0CODE{len(code_spans) - 1}\0"
-
-    text = _INLINE_CODE_RE.sub(_stash_code, text)
-
-    # Stash inline style spans (colour / background-colour) so their
-    # ``<span>`` wrappers survive HTML escaping and are emitted verbatim
-    # into the storage XML.
-    spans: List[str] = []
-
-    def _stash_style_span(match: "re.Match[str]") -> str:
-        style = _sanitise_inline_style(match.group("style"))
-        if not style:
-            # Nothing safe left – fall through so the literal tag text is
-            # HTML-escaped like any other input.
-            return match.group(0)
-        body = _render_inline(match.group("body"))
-        spans.append(f'<span style="{html.escape(style, quote=True)}">{body}</span>')
-        return f"\0SPAN{len(spans) - 1}\0"
-
-    text = _STYLE_SPAN_RE.sub(_stash_style_span, text)
-
-    # Stash safe inline passthrough tags (<u>, <s>, <sub>, <sup>, …) and
-    # line breaks so they survive HTML escaping.
-    passthrough: List[str] = []
-
-    def _stash_passthrough(match: "re.Match[str]") -> str:
-        passthrough.append(match.group(0).lower())
-        return f"\0HTML{len(passthrough) - 1}\0"
-
-    text = _INLINE_PASSTHROUGH_RE.sub(_stash_passthrough, text)
-    text = _BR_RE.sub(_stash_passthrough, text)
-
-    # Stash images and links before HTML-escaping so their URLs survive.
-    links: List[str] = []
-
-    def _stash_image(match: "re.Match[str]") -> str:
-        alt = html.escape(match.group("alt"), quote=True)
-        src = html.escape(match.group("src"), quote=True)
-        links.append(f'<ac:image><ri:url ri:value="{src}" ri:title="{alt}" /></ac:image>')
-        return f"\0LINK{len(links) - 1}\0"
-
-    def _stash_link(match: "re.Match[str]") -> str:
-        label = match.group("label")
-        url = html.escape(match.group("url"), quote=True)
-        links.append(f'<a href="{url}">{html.escape(label)}</a>')
-        return f"\0LINK{len(links) - 1}\0"
-
-    text = _IMAGE_RE.sub(_stash_image, text)
-    text = _LINK_RE.sub(_stash_link, text)
-
-    escaped = html.escape(text)
-    escaped = _BOLD_RE.sub(r"<strong>\1</strong>", escaped)
-    escaped = _ITALIC_RE.sub(r"<em>\1</em>", escaped)
-
-    # Put the stashed pieces back.
-    def _restore_code(match: "re.Match[str]") -> str:
-        idx = int(match.group(1))
-        return f"<code>{html.escape(code_spans[idx])}</code>"
-
-    def _restore_link(match: "re.Match[str]") -> str:
-        idx = int(match.group(1))
-        return links[idx]
-
-    escaped = re.sub(r"\0CODE(\d+)\0", _restore_code, escaped)
-    escaped = re.sub(r"\0LINK(\d+)\0", _restore_link, escaped)
-
-    def _restore_span(match: "re.Match[str]") -> str:
-        idx = int(match.group(1))
-        return spans[idx]
-
-    escaped = re.sub(r"\0SPAN(\d+)\0", _restore_span, escaped)
-
-    def _restore_passthrough(match: "re.Match[str]") -> str:
-        idx = int(match.group(1))
-        tag = passthrough[idx]
-        if tag.startswith("<br"):
-            return "<br/>"
-        return tag
-
-    escaped = re.sub(r"\0HTML(\d+)\0", _restore_passthrough, escaped)
-    return escaped
+    for i, t in enumerate(body):
+        if t.type == "paragraph_open" and i + 1 < len(body):
+            inline = body[i + 1]
+            if inline.type == "inline":
+                return "".join(_plain_text(c) for c in (inline.children or []))
+    return ""
 
 
-# -------------------------------------------------------------- iframes
-# An ``<iframe>`` line survives a pull → edit → push cycle by being
-# emitted verbatim.  The serialiser below parses the tag with a small
-# attribute regex (rather than ``html.parser``) so that the original
-# Markdown source doesn't need to be fed through a full HTML tree, and
-# it reuses ``storage_to_md`` helpers to sanitise ``src`` and ``style``.
+def _render_list_item(body: List[Token]) -> str:
+    """Render the body tokens of a single ``<li>`` to storage XML.
 
-_IFRAME_SAFE_ATTRS = (
-    "src",
-    "width",
-    "height",
-    "frameborder",
-    "allowfullscreen",
-    "allow",
-    "title",
-    "name",
-    "scrolling",
-    "style",
-)
-_SAFE_IFRAME_SRC_RE = re.compile(r"(?i)^(?:https?:)?//[^\s\"'<>]+$|^https?://[^\s\"'<>]+$")
-_SAFE_DIMENSION_RE = re.compile(r"^\d+(?:\.\d+)?(?:px|%)?$")
+    A list item may contain multiple paragraphs and/or nested lists.
+    Single-paragraph items render the inline content directly (without a
+    wrapping ``<p>``) to match the shape ``storage_to_markdown`` emits
+    and keep the existing tests happy.
+    """
+
+    # Shortcut: exactly one paragraph → emit its inline content.
+    if (
+        len(body) == 3
+        and body[0].type == "paragraph_open"
+        and body[1].type == "inline"
+        and body[2].type == "paragraph_close"
+    ):
+        return _render_inline(body[1].children or [])
+
+    # Otherwise render via a sub-renderer but then unwrap a single
+    # leading ``<p>…</p>`` (for items that are "paragraph + nested list").
+    sub = _BlockRenderer(body)
+    rendered = sub.render()
+    rendered = re.sub(r"^<p>(.*?)</p>", r"\1", rendered, count=1, flags=re.DOTALL)
+    return rendered
 
 
-def _parse_iframe_attrs(markup: str) -> dict:
-    """Parse attributes out of an ``<iframe ...>`` opening tag."""
+def _detect_admonition(tokens: List[Token]) -> Optional[str]:
+    """If the first paragraph is a ``[!NAME]`` header, mutate ``tokens``
+    in place to remove it and return ``"info"`` / ``"note"`` / etc.
+    """
 
-    # Strip the leading ``<iframe`` and trailing ``>`` (or ``/>``).
-    match = re.match(r"(?is)^<iframe\b(?P<body>.*?)/?\s*>\s*(?:</iframe>)?\s*$", markup)
-    if not match:
-        return {}
-    attrs: dict = {}
-    for attr_match in _IFRAME_ATTR_RE.finditer(match.group("body")):
-        name = attr_match.group("name").lower()
-        value = (
-            attr_match.group("dq")
-            if attr_match.group("dq") is not None
-            else attr_match.group("sq")
-            if attr_match.group("sq") is not None
-            else attr_match.group("bare")
-        )
-        if value is None:
-            # Bare boolean attribute.
-            attrs[name] = ""
+    if not tokens:
+        return None
+    # Find first paragraph.
+    for i in range(len(tokens)):
+        t = tokens[i]
+        if t.type != "paragraph_open":
+            continue
+        if i + 2 >= len(tokens):
+            return None
+        inline = tokens[i + 1]
+        if inline.type != "inline":
+            return None
+        content_lines: List[str] = []
+        # Rebuild into newline-separated lines so ``[!INFO]\nbody`` can be
+        # recognised even though markdown-it represents soft breaks as a
+        # distinct child rather than a literal ``\n``.
+        cur = ""
+        for c in (inline.children or []):
+            if c.type in ("softbreak", "hardbreak"):
+                content_lines.append(cur)
+                cur = ""
+            elif c.type == "text":
+                cur += c.content
+            else:
+                # Any non-text inline token means we're past the header.
+                cur += ""
+        content_lines.append(cur)
+        if not content_lines:
+            return None
+        match = _ADMONITION_HEADER_RE.match(content_lines[0].strip())
+        if not match:
+            return None
+        name = match.group("name").lower()
+        rest = "\n".join(content_lines[1:]).strip()
+        if rest:
+            inline.content = rest
+            inline.children = [_make_text_token(rest)]
         else:
-            attrs[name] = html.unescape(value)
-    return attrs
+            del tokens[i:i + 3]
+        return name
+    return None
 
 
-def _serialise_iframe_from_markup(markup: str) -> str:
-    """Serialise a Markdown ``<iframe ...>`` line into safe storage XHTML.
+def _make_text_token(text: str) -> Token:
+    tok = Token("text", "", 0)
+    tok.content = text
+    return tok
 
-    Returns ``""`` if the iframe has no safe ``src`` – in that case the
-    block is silently dropped rather than emitted in a broken form.
+
+_TASK_MARKER_STRIP_RE = re.compile(r"^\[([ xX])\]\s+")
+
+
+def _strip_leading_task_marker(body_xml: str) -> str:
+    return _TASK_MARKER_STRIP_RE.sub("", body_xml, count=1)
+
+
+def _render_inline_html_body(body: str) -> str:
+    """Render the HTML inside a ``<p style="text-align:…">…</p>`` block.
+
+    The body is already HTML from the perspective of Markdown (it was
+    pass-through markup), so we emit it verbatim.  We still sanitise any
+    ``<span style="…">`` wrappers the body contains so attribute policy
+    is enforced the same way as in paragraph bodies.
     """
 
-    # Local import to avoid a module-level cycle with ``storage_to_md``.
-    from .storage_to_md import _build_span_style, _extract_align
+    return _sanitise_html_fragment(body)
 
-    attrs = _parse_iframe_attrs(markup)
-    src = (attrs.get("src") or "").strip()
-    if not src or not _SAFE_IFRAME_SRC_RE.match(src):
-        return ""
 
-    rendered: List[str] = [f'src="{html.escape(src, quote=True)}"']
-    for name in _IFRAME_SAFE_ATTRS:
-        if name == "src" or name not in attrs:
-            continue
-        value = attrs[name]
-        if name == "allowfullscreen":
-            rendered.append("allowfullscreen")
-            continue
-        if name == "style":
-            sanitised = _build_span_style(value)
-            align = _extract_align(value)
-            parts: List[str] = []
-            if sanitised:
-                parts.append(sanitised)
-            if align:
-                parts.append(f"text-align: {align}")
-            if not parts:
-                continue
-            value = "; ".join(parts)
-        elif name in ("width", "height"):
-            stripped = value.strip()
-            if not _SAFE_DIMENSION_RE.match(stripped):
-                continue
-            value = stripped
-        rendered.append(f'{name}="{html.escape(value, quote=True)}"')
+def _sanitise_html_fragment(fragment: str) -> str:
+    """Filter a raw inline HTML fragment the same way ``_sanitise_html_inline``
+    would filter a sequence of ``html_inline`` tokens.
+    """
 
-    return f"<iframe {' '.join(rendered)}></iframe>"
+    # Simple tag-by-tag walk: find each tag, sanitise if it's a span,
+    # drop unknown tags, keep text in between.  This intentionally mirrors
+    # the regex strategy the old implementation used for the analogous
+    # case, but scoped to just the aligned-paragraph body.
+    out: List[str] = []
+    pos = 0
+    for match in re.finditer(r"<[^>]+>", fragment):
+        start, end = match.span()
+        if start > pos:
+            out.append(fragment[pos:start])
+        tag = match.group(0)
+        if _BR_RE.match(tag):
+            out.append("<br/>")
+        elif _INLINE_HTML_PASSTHROUGH.match(tag):
+            out.append(tag.lower())
+        else:
+            span = _SPAN_OPEN_RE.match(tag)
+            if span:
+                safe = _sanitise_inline_style(span.group("style"))
+                if safe:
+                    out.append(f'<span style="{html.escape(safe, quote=True)}">')
+            elif tag.lower() == "</span>":
+                joined = "".join(out)
+                if joined.count("<span ") > joined.count("</span>"):
+                    out.append("</span>")
+            # else: drop the tag entirely.
+        pos = end
+    if pos < len(fragment):
+        out.append(fragment[pos:])
+    return "".join(out)

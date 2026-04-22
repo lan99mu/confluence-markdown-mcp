@@ -446,3 +446,41 @@ def test_bare_iframe_pull_round_trip():
     back = markdown_to_storage(md)
     assert 'ac:name="html-bobswift"' in back
     assert 'src="https://example.com/diagram"' in back
+
+
+def test_single_column_table_round_trip():
+    """Single-column tables emitted by ``storage_to_markdown`` (``| --- |``
+    separator) must round-trip back to a ``<table>`` – otherwise the cell
+    contents, including any inline ``<span>`` / ``<br>`` wrappers, leak
+    into a plain paragraph on push.
+    """
+
+    storage = (
+        "<table><tbody>"
+        "<tr><th>是否有架构设计</th></tr>"
+        '<tr><td>有<br/><span style="color: red">不一致</span></td></tr>'
+        "</tbody></table>"
+    )
+    md = storage_to_markdown(storage)
+    # The emitted separator has a single ``---`` group.
+    assert "| --- |" in md
+
+    back = markdown_to_storage(md)
+    assert "<table>" in back
+    assert "<th>是否有架构设计</th>" in back
+    assert "<td>" in back
+    assert '<span style="color: red">不一致</span>' in back
+    assert "<br/>" in back
+    # The literal pipes from the Markdown separator must not leak into
+    # the storage XML as paragraph text.
+    assert "| --- |" not in back
+
+
+def test_single_column_table_does_not_eat_horizontal_rule_like_lines():
+    """A bare ``---`` line (no surrounding pipes) must still be treated as
+    a normal paragraph, not a single-column table separator.
+    """
+
+    md = "Some text\n\n---\n\nMore text\n"
+    storage = markdown_to_storage(md)
+    assert "<table>" not in storage

@@ -69,8 +69,14 @@ _RICH_BODY_RE = re.compile(
     re.DOTALL,
 )
 
-PLACEHOLDER_PREFIX = "\0MACRO"
-PLACEHOLDER_RE = re.compile(r"\0MACRO(\d+)\0")
+# Use Private-Use-Area sentinel characters as placeholders so they
+# survive both ``html.parser.HTMLParser`` and ``lxml``'s HTML parser
+# (lxml turns ``\0`` into U+FFFD).  U+E000 / U+E001 are not assigned to
+# any real character, so the chance of collision with page content is
+# effectively zero.
+PLACEHOLDER_PREFIX = "\ue000MACRO"
+_PLACEHOLDER_END = "\ue001"
+PLACEHOLDER_RE = re.compile(r"\ue000MACRO(\d+)\ue001")
 
 
 def preprocess_storage(storage_html: str) -> Tuple[str, List[str]]:
@@ -89,7 +95,7 @@ def preprocess_storage(storage_html: str) -> Tuple[str, List[str]]:
         body = match.group("body") or ""
         snippet = _render_macro(name, body)
         replacements.append(snippet)
-        return f"{PLACEHOLDER_PREFIX}{len(replacements) - 1}\0"
+        return f"{PLACEHOLDER_PREFIX}{len(replacements) - 1}{_PLACEHOLDER_END}"
 
     processed = _rewrite_task_lists(storage_html)
     processed = _MACRO_RE.sub(_replace, processed)
