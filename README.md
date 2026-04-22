@@ -152,7 +152,10 @@ confluence-markdown-mcp serve
 | `<ul>/<ol>/<li>` | `-` / `1.` 列表，支持嵌套（两空格缩进） |
 | `<ac:task-list>` / `<ac:task>` | GFM 任务列表：`- [ ] body` / `- [x] body` |
 | `<span style="color:…">` / `<font color="…">` | 原样保留 `<span>` 行内 HTML，色值保持 |
+| `<p style="text-align: left/right/center/justify">` | 原样保留对齐样式的 `<p>` |
+| 行内 `<u>`、`<s>`/`<del>`、`<ins>`、`<sub>`、`<sup>`、`<br>` | 原样保留相同标签 |
 | `<a href=...>` / `<img>` | `[text](url)` / `![alt](src)` |
+| `html` / `html-bobswift` 宏内的 `<iframe>`（drawio / diagrams.net 等） | 拉取时解包为单行 `<iframe …></iframe>`；上传时自动重新用 `html-bobswift` 宏包裹，`src` 限制为 http/https，并剥离 `onload` / `srcdoc` / `sandbox` 等非白名单属性 |
 | 其他未知 `<ac:structured-macro>` | 保留为 HTML 注释 token，上传时原样还原 |
 
 代码块内容使用 `CDATA` 原样保存；对 `]]>` 序列做了分片处理以避免 XML 解析错误。
