@@ -48,6 +48,11 @@ def extract_align(style: str) -> str:
 
 
 def extract_color(style: str) -> str:
+    """Return the ``color`` value from ``style`` if it passes the allow-list,
+    otherwise ``""``.  Used to filter ``<span style>`` wrappers produced by
+    Confluence so crafted input cannot smuggle arbitrary CSS into output.
+    """
+
     if not style:
         return ""
     match = _COLOR_RE.search(style)
@@ -58,6 +63,10 @@ def extract_color(style: str) -> str:
 
 
 def extract_background_color(style: str) -> str:
+    """Return the ``background-color`` value from ``style`` if it passes the
+    allow-list, otherwise ``""``.  See :func:`extract_color`.
+    """
+
     if not style:
         return ""
     match = _BG_COLOR_RE.search(style)

@@ -217,7 +217,16 @@ class _Renderer:
     def _tag_b(self, el):      self._wrap(el, "**", "**")
     def _tag_em(self, el):     self._wrap(el, "*", "*")
     def _tag_i(self, el):      self._wrap(el, "*", "*")
-    def _tag_u(self, el):      self._wrap(el, "*", "*")
+    # Markdown has no native syntax for underline / strike / sub / sup, so
+    # emit the literal HTML tags – both directions of the converter treat
+    # these as allow-listed passthrough, so they round-trip cleanly.
+    def _tag_u(self, el):       self._wrap(el, "<u>", "</u>")
+    def _tag_s(self, el):       self._wrap(el, "<s>", "</s>")
+    def _tag_strike(self, el):  self._wrap(el, "<s>", "</s>")
+    def _tag_del(self, el):     self._wrap(el, "<del>", "</del>")
+    def _tag_ins(self, el):     self._wrap(el, "<ins>", "</ins>")
+    def _tag_sub(self, el):     self._wrap(el, "<sub>", "</sub>")
+    def _tag_sup(self, el):     self._wrap(el, "<sup>", "</sup>")
 
     def _tag_code(self, el) -> None:
         if self._pre_depth:
