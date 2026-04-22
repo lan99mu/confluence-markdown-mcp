@@ -35,6 +35,26 @@ _MACRO_RE = re.compile(
     re.DOTALL,
 )
 
+# Confluence task lists are *not* wrapped in ``<ac:structured-macro>`` – they
+# are first-class elements.  We rewrite them into a plain ``<ul>`` with
+# ``[ ]`` / ``[x]`` task markers so the HTML parser can handle them
+# naturally; otherwise the ``<ac:task-id>`` / ``<ac:task-status>`` children
+# leak through as bare text ("9 incomplete 有，…").
+_TASK_LIST_RE = re.compile(r"<ac:task-list\b[^>]*>(?P<body>.*?)</ac:task-list>", re.DOTALL)
+_TASK_RE = re.compile(r"<ac:task\b[^>]*>(?P<body>.*?)</ac:task>", re.DOTALL)
+_TASK_STATUS_RE = re.compile(
+    r"<ac:task-status\b[^>]*>(?P<status>[^<]*)</ac:task-status>",
+    re.DOTALL,
+)
+_TASK_BODY_RE = re.compile(
+    r"<ac:task-body\b[^>]*>(?P<body>.*?)</ac:task-body>",
+    re.DOTALL,
+)
+_TASK_ID_RE = re.compile(
+    r"<ac:task-id\b[^>]*>[^<]*</ac:task-id>",
+    re.DOTALL,
+)
+
 _LANG_RE = re.compile(
     r"<ac:parameter\b[^>]*\bac:name\s*=\s*\"language\"[^>]*>(?P<lang>[^<]*)"
     r"</ac:parameter>",
@@ -71,7 +91,8 @@ def preprocess_storage(storage_html: str) -> Tuple[str, List[str]]:
         replacements.append(snippet)
         return f"{PLACEHOLDER_PREFIX}{len(replacements) - 1}\0"
 
-    processed = _MACRO_RE.sub(_replace, storage_html)
+    processed = _rewrite_task_lists(storage_html)
+    processed = _MACRO_RE.sub(_replace, processed)
     return processed, replacements
 
 
@@ -88,6 +109,43 @@ def postprocess_markdown(markdown_text: str, replacements: List[str]) -> str:
 
 
 # ------------------------------------------------------------------ helpers
+
+
+def _rewrite_task_lists(storage_html: str) -> str:
+    """Turn ``<ac:task-list>`` blocks into plain ``<ul>`` markup.
+
+    Each ``<ac:task>`` becomes ``<li>[ ] body</li>`` (incomplete) or
+    ``<li>[x] body</li>`` (complete).  ``<ac:task-id>`` elements are dropped
+    because the IDs are not meaningful once the page is edited offline.
+    Nested task lists are handled naturally because the regex is applied
+    iteratively (innermost first, thanks to non-greedy matching of siblings
+    that do not themselves contain ``</ac:task-list>``).
+    """
+
+    def _render_task(match: "re.Match[str]") -> str:
+        body = match.group("body") or ""
+        status = ""
+        status_match = _TASK_STATUS_RE.search(body)
+        if status_match:
+            status = status_match.group("status").strip().lower()
+        body_match = _TASK_BODY_RE.search(body)
+        inner = body_match.group("body") if body_match else ""
+        mark = "[x]" if status == "complete" else "[ ]"
+        return f"<li>{mark} {inner}</li>"
+
+    def _render_task_list(match: "re.Match[str]") -> str:
+        inner = match.group("body") or ""
+        inner = _TASK_ID_RE.sub("", inner)
+        inner = _TASK_RE.sub(_render_task, inner)
+        return f"<ul>{inner}</ul>"
+
+    previous = None
+    current = storage_html
+    # Iterate so that nested ``<ac:task-list>`` entries are rewritten too.
+    while previous != current:
+        previous = current
+        current = _TASK_LIST_RE.sub(_render_task_list, current)
+    return current
 
 
 def _render_macro(name: str, body: str) -> str:

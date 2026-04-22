@@ -90,6 +90,9 @@ confluence-markdown-mcp pull --page-id 123456
 # 拉取到文件（自动带 front matter）
 confluence-markdown-mcp pull --page-id 123456 -o ./docs/my-page.md
 
+# 拉取到目录：文件名自动使用 wiki 页面 title（非法字符会被替换）
+confluence-markdown-mcp pull --page-id 123456 -o ./docs/
+
 # 回写到 wiki（页面 ID 取自 front matter 或 --page-id）
 confluence-markdown-mcp push --file ./docs/my-page.md
 confluence-markdown-mcp push --file ./docs/my-page.md --page-id 123456 --title "新标题"
@@ -147,6 +150,8 @@ confluence-markdown-mcp serve
 | `<ac:structured-macro ac:name="info/note/warning/tip">` | `> [!INFO]` 风格的 GFM admonition 引用块 |
 | `<table>` + `<th>/<td>` | 标准管道分隔表格（首行作表头） |
 | `<ul>/<ol>/<li>` | `-` / `1.` 列表，支持嵌套（两空格缩进） |
+| `<ac:task-list>` / `<ac:task>` | GFM 任务列表：`- [ ] body` / `- [x] body` |
+| `<span style="color:…">` / `<font color="…">` | 原样保留 `<span>` 行内 HTML，色值保持 |
 | `<a href=...>` / `<img>` | `[text](url)` / `![alt](src)` |
 | 其他未知 `<ac:structured-macro>` | 保留为 HTML 注释 token，上传时原样还原 |
 

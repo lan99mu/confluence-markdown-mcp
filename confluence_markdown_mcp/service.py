@@ -7,6 +7,7 @@ convert → update) so that the transport-specific front-ends stay thin.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
@@ -61,7 +62,11 @@ class ConfluenceService:
 
         resolved_path: Optional[str] = None
         if output_path:
-            resolved_path = _resolve_output_path(output_path, self.settings)
+            resolved_path = _resolve_output_path(
+                output_path,
+                self.settings,
+                title=str(page.get("title", "")),
+            )
             dump_markdown_file(resolved_path, page, markdown)
 
         return PullResult(
@@ -120,18 +125,58 @@ class ConfluenceService:
         )
 
 
-def _resolve_output_path(path: str, settings: Optional[Settings]) -> str:
+def _resolve_output_path(
+    path: str,
+    settings: Optional[Settings],
+    title: str = "",
+) -> str:
     """Return an absolute path, honouring ``CONFLUENCE_MARKDOWN_DIR``.
 
     When ``path`` is relative *and* the user has configured a default
     workspace directory, files are written beneath it; otherwise the
     current working directory is used.
+
+    When ``path`` refers to a directory (existing, or ending in a path
+    separator), the page ``title`` is used as the filename – mirroring the
+    behaviour of many wiki exporters and avoiding the need for the caller
+    to repeat the title on the command line.
     """
 
+    ends_with_sep = path.endswith(("/", os.sep))
     if os.path.isabs(path):
-        return path
-    root = settings.markdown_dir if settings and settings.markdown_dir else None
-    return os.path.abspath(os.path.join(root, path) if root else path)
+        absolute = path
+    else:
+        root = settings.markdown_dir if settings and settings.markdown_dir else None
+        absolute = os.path.abspath(os.path.join(root, path) if root else path)
+
+    is_dir = os.path.isdir(absolute) or ends_with_sep
+    if is_dir:
+        filename = _title_to_filename(title) + ".md"
+        absolute = os.path.join(absolute, filename)
+    return absolute
+
+
+# Characters that are unsafe or awkward on common filesystems.  We keep the
+# Unicode letters/numbers that make CJK titles readable and only strip what
+# would actually cause problems.
+_UNSAFE_FILENAME_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+
+
+def _title_to_filename(title: str, fallback: str = "page") -> str:
+    """Return a filesystem-safe file name derived from a page title."""
+
+    cleaned = _UNSAFE_FILENAME_RE.sub(" ", title or "")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    # Strip leading dots to avoid accidentally producing hidden files.
+    cleaned = cleaned.lstrip(".")
+    if not cleaned:
+        cleaned = fallback
+    # Cap the length at a sensible value – some filesystems reject names
+    # longer than 255 bytes and titles are often quite long in Chinese.
+    max_length = 120
+    if len(cleaned) > max_length:
+        cleaned = cleaned[:max_length].rstrip()
+    return cleaned
 
 
 def page_summary(result: Any) -> Dict[str, Any]:

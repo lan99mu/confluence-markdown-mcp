@@ -331,6 +331,13 @@ _BOLD_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
 _ITALIC_RE = re.compile(r"\*(.+?)\*", re.DOTALL)
 _LINK_RE = re.compile(r"\[(?P<label>[^\]]+)\]\((?P<url>[^)\s]+)\)")
 _IMAGE_RE = re.compile(r"!\[(?P<alt>[^\]]*)\]\((?P<src>[^)\s]+)\)")
+# Inline colour wrappers produced by ``storage_to_markdown``.  They must
+# round-trip back to the storage format verbatim so colours survive a
+# pull → edit → push cycle.
+_COLOR_SPAN_RE = re.compile(
+    r'<span\s+style="color:\s*(?P<color>[^";<>]+)"\s*>(?P<body>.*?)</span>',
+    re.DOTALL | re.IGNORECASE,
+)
 
 
 def _render_inline(text: str) -> str:
@@ -349,6 +356,18 @@ def _render_inline(text: str) -> str:
         return f"\0CODE{len(code_spans) - 1}\0"
 
     text = _INLINE_CODE_RE.sub(_stash_code, text)
+
+    # Stash inline colour spans so their ``<span>`` wrappers survive HTML
+    # escaping and are emitted verbatim into the storage XML.
+    spans: List[str] = []
+
+    def _stash_color_span(match: "re.Match[str]") -> str:
+        color = html.escape(match.group("color").strip(), quote=True)
+        body = _render_inline(match.group("body"))
+        spans.append(f'<span style="color: {color}">{body}</span>')
+        return f"\0SPAN{len(spans) - 1}\0"
+
+    text = _COLOR_SPAN_RE.sub(_stash_color_span, text)
 
     # Stash images and links before HTML-escaping so their URLs survive.
     links: List[str] = []
@@ -383,4 +402,10 @@ def _render_inline(text: str) -> str:
 
     escaped = re.sub(r"\0CODE(\d+)\0", _restore_code, escaped)
     escaped = re.sub(r"\0LINK(\d+)\0", _restore_link, escaped)
+
+    def _restore_span(match: "re.Match[str]") -> str:
+        idx = int(match.group(1))
+        return spans[idx]
+
+    escaped = re.sub(r"\0SPAN(\d+)\0", _restore_span, escaped)
     return escaped
