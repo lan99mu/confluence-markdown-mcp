@@ -296,9 +296,32 @@ class _StorageParser(HTMLParser):
 
 
 def _normalise_cell(text: str) -> str:
-    text = re.sub(r"\s+", " ", text).strip()
-    # Pipes and newlines must not leak into a Markdown table row.
-    return text.replace("|", "\\|")
+    """Flatten a cell's rendered Markdown so it fits a single table row.
+
+    Markdown tables do not support literal newlines inside cells, yet
+    Confluence pages happily embed lists (including task lists with
+    ``[ ]`` / ``[x]`` checkboxes) within ``<td>`` elements.  To preserve
+    the visual structure we convert embedded newlines into ``<br>`` tags
+    and render leading indentation as ``&nbsp;`` so nested list items
+    remain offset on render.  Pipes are escaped to avoid breaking the
+    row layout.
+    """
+
+    text = text.replace("\r", "").replace("|", "\\|")
+    lines: List[str] = []
+    for raw in text.split("\n"):
+        match = re.match(r"[ \t]*", raw)
+        leading = match.group(0) if match else ""
+        rest = raw[len(leading):]
+        rest = re.sub(r"[ \t]+", " ", rest).rstrip()
+        if not rest:
+            continue
+        # Skip bare list markers (``-``, ``*``, ``1.``) with no content.
+        if re.fullmatch(r"(?:[-*]|\d+\.)", rest):
+            continue
+        indent_width = len(leading.expandtabs(2))
+        lines.append(("&nbsp;" * indent_width) + rest)
+    return "<br>".join(lines)
 
 
 _COLOR_RE = re.compile(r"(?i)color\s*:\s*([^;]+?)\s*(?:;|$)")

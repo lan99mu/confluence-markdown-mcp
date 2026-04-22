@@ -130,6 +130,53 @@ def test_color_span_rejects_css_injection():
         assert markdown_to_storage(md).find(forbidden) == -1
 
 
+def test_task_list_inside_table_cell_preserves_checkboxes_and_breaks():
+    """Task-list items inside a ``<td>`` must keep their line breaks and
+    checkbox markers.  Confluence emits whitespace between ``<ac:task>``
+    elements which previously caused the cell to collapse into one line
+    such as ``- [ ] A - [ ] B`` – losing both the list breaks and any
+    nested indentation.
+    """
+
+    storage = (
+        "<table><tbody><tr><td>"
+        "<ac:task-list>"
+        "  <ac:task><ac:task-id>1</ac:task-id>"
+        "<ac:task-status>incomplete</ac:task-status>"
+        "<ac:task-body>有，架构设计地址是：</ac:task-body></ac:task>"
+        "  <ac:task><ac:task-id>2</ac:task-id>"
+        "<ac:task-status>incomplete</ac:task-status>"
+        "<ac:task-body>无，原因是：</ac:task-body></ac:task>"
+        "</ac:task-list>"
+        "</td></tr></tbody></table>"
+    )
+    md = storage_to_markdown(storage)
+    # Find the table row with the cell content.
+    cell_row = next(
+        line for line in md.splitlines()
+        if "有，架构设计地址是" in line
+    )
+    # Both checkboxes survive.
+    assert cell_row.count("- [ ]") == 2
+    # They are separated by ``<br>`` rather than collapsed onto one line.
+    assert "- [ ] 有，架构设计地址是：<br>- [ ] 无，原因是：" in cell_row
+    # Leaked ``<ac:*>`` text must not appear.
+    assert "incomplete" not in md
+
+
+def test_nested_list_in_table_cell_preserves_indentation():
+    storage = (
+        "<table><tbody><tr><td>"
+        "<ul><li>parent<ul><li>child</li></ul></li></ul>"
+        "</td></tr></tbody></table>"
+    )
+    md = storage_to_markdown(storage)
+    cell_row = next(line for line in md.splitlines() if "parent" in line)
+    # Child item must be offset with non-breaking spaces so the hierarchy
+    # remains visible inside a single-line Markdown table cell.
+    assert "- parent<br>&nbsp;&nbsp;- child" in cell_row
+
+
 def test_task_list_converted_to_task_markers():
     storage = (
         "<p>任务：</p>"
