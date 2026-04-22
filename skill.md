@@ -87,7 +87,7 @@ converting to Markdown, and reverses the process on upload:
 | `<a>` / `<img>` | `[text](url)` / `![alt](src)` |
 | `<span style="color: …; background-color: …">` | Same `<span>` verbatim |
 | `<p style="text-align: left/right/center/justify">` | Same `<p>` verbatim |
-| Inline `<u>`, `<s>`/`<del>`, `<sub>`, `<sup>`, `<br>` | Same tag verbatim |
+| Inline `<u>`, `<s>`/`<del>`, `<ins>`, `<sub>`, `<sup>`, `<br>` | Same tag verbatim |
 | `html` / `html-bobswift` macro (embedded `<iframe>`, e.g. drawio / diagrams.net) | Raw HTML body is unwrapped into a Markdown `<iframe …></iframe>` line; push re-wraps it in `html-bobswift` automatically |
 | Any other `<ac:structured-macro>` | HTML comment token that round-trips |
 
