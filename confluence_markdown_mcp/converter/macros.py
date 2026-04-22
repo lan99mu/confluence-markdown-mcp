@@ -153,7 +153,29 @@ def _render_macro(name: str, body: str) -> str:
         return _render_code_macro(body)
     if name in ADMONITIONS:
         return _render_admonition_macro(name, body)
+    if name == "html" or name == "html-bobswift":
+        return _render_html_macro(body)
     return _render_unknown_macro(name, body)
+
+
+def _render_html_macro(body: str) -> str:
+    """Expand an ``html`` / ``html-bobswift`` macro to its raw HTML body.
+
+    The macro's ``<ac:plain-text-body>`` is a CDATA block of literal HTML
+    (most commonly an ``<iframe>`` embed for drawio / diagrams.net).  We
+    splice the HTML back into the stream so the downstream parser can
+    render it naturally — an ``<iframe>`` inside becomes a Markdown
+    iframe line, links become Markdown links, etc.
+    """
+
+    text_match = _PLAIN_BODY_RE.search(body)
+    raw = text_match.group("text") if text_match else ""
+    raw = raw.strip()
+    if not raw:
+        return ""
+    # Preserve surrounding blank lines so the embed is treated as its
+    # own block when the HTML parser sees it.
+    return f"\n\n{raw}\n\n"
 
 
 def _render_code_macro(body: str) -> str:

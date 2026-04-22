@@ -208,3 +208,241 @@ def test_empty_placeholder_scaffolding_is_stripped():
     # No stray empty list markers on their own line.
     for line in md.splitlines():
         assert line.strip() not in {"-", "*"}
+
+
+# --------------------------------------------------------------------- push
+# Regression tests for the three reported issues:
+#   1. HTML-style markup written in Markdown must be preserved on push.
+#   2. Colour / background-colour spans must round-trip.
+#   3. Block alignment must survive pull + push; task-list checkboxes must
+#      round-trip back into a Confluence ``<ac:task-list>`` on push.
+
+
+def test_push_preserves_inline_html_styles():
+    md = "A <u>underlined</u> and <s>struck</s> and <sup>up</sup> bit.\n"
+    storage = markdown_to_storage(md)
+    assert "<u>underlined</u>" in storage
+    assert "<s>struck</s>" in storage
+    assert "<sup>up</sup>" in storage
+    # The surrounding text must still be emitted as normal paragraph HTML
+    # rather than escaped.
+    assert "&lt;u&gt;" not in storage
+
+
+def test_push_preserves_linebreak_tag():
+    md = "line one<br>line two\n"
+    storage = markdown_to_storage(md)
+    assert "<br/>" in storage
+    assert "&lt;br" not in storage
+
+
+def test_push_preserves_background_color_span():
+    md = '<span style="background-color: #ffff00">highlight</span>\n'
+    storage = markdown_to_storage(md)
+    assert 'background-color: #ffff00' in storage
+    assert '<span style="background-color: #ffff00">highlight</span>' in storage
+
+
+def test_push_preserves_combined_color_and_background():
+    md = '<span style="color: red; background-color: yellow">mix</span>\n'
+    storage = markdown_to_storage(md)
+    assert 'color: red' in storage
+    assert 'background-color: yellow' in storage
+
+
+def test_color_span_inside_list_round_trip():
+    storage = (
+        "<ul>"
+        '<li>a <span style="color: red">red</span> item</li>'
+        "<li>plain</li>"
+        "</ul>"
+    )
+    md = storage_to_markdown(storage)
+    assert '<span style="color: red">red</span>' in md
+    back = markdown_to_storage(md)
+    assert '<span style="color: red">red</span>' in back
+    assert "<ul>" in back and "<li>" in back
+
+
+def test_pull_preserves_paragraph_alignment():
+    storage = (
+        '<p style="text-align: center">Centered text</p>'
+        '<p style="text-align: right">Right-aligned</p>'
+        "<p>plain</p>"
+    )
+    md = storage_to_markdown(storage)
+    assert '<p style="text-align: center">Centered text</p>' in md
+    assert '<p style="text-align: right">Right-aligned</p>' in md
+
+
+def test_paragraph_alignment_round_trip():
+    storage = '<p style="text-align: center">Hello</p>'
+    md = storage_to_markdown(storage)
+    back = markdown_to_storage(md)
+    assert '<p style="text-align: center">Hello</p>' in back
+
+
+def test_paragraph_alignment_rejects_unsafe_values():
+    storage = '<p style="text-align: url(evil)">oops</p>'
+    md = storage_to_markdown(storage)
+    assert "url(evil)" not in md
+    # Falls back to a plain paragraph.
+    assert "oops" in md
+
+
+def test_task_list_push_round_trip():
+    md = "- [ ] todo one\n- [x] done two\n"
+    storage = markdown_to_storage(md)
+    assert "<ac:task-list>" in storage
+    assert "<ac:task-status>incomplete</ac:task-status>" in storage
+    assert "<ac:task-status>complete</ac:task-status>" in storage
+    assert "todo one" in storage and "done two" in storage
+    # The plain-bullet form must not leak through when the whole list is a
+    # task list.
+    assert "<ul>" not in storage
+    # Full storage → md → storage round trip keeps the macro.
+    md2 = storage_to_markdown(storage)
+    assert "- [ ] todo one" in md2
+    assert "- [x] done two" in md2
+
+
+def test_mixed_list_is_not_converted_to_task_list():
+    md = "- [ ] a task\n- regular bullet\n"
+    storage = markdown_to_storage(md)
+    # One of the items is not a task marker, so we keep the plain list
+    # rather than silently dropping its content into a task macro.
+    assert "<ac:task-list>" not in storage
+    assert "<ul>" in storage
+
+
+def test_push_rejects_unsafe_style_declarations():
+    # Only ``color`` and ``background-color`` declarations with allow-listed
+    # values survive; arbitrary CSS properties must be dropped so crafted
+    # markdown cannot smuggle styles into the storage XML.
+    md = (
+        '<span style="color: red; font-size: 99px; '
+        'background: url(javascript:alert(1))">x</span>\n'
+    )
+    storage = markdown_to_storage(md)
+    assert "color: red" in storage
+    assert "font-size" not in storage
+    assert "javascript" not in storage
+    assert "url(" not in storage
+
+
+# --- drawio / iframe embeds via html-bobswift macro ---------------------
+
+
+def test_pull_html_bobswift_macro_exposes_iframe():
+    """``html-bobswift`` wraps raw HTML in a CDATA block.  On pull the
+    body must be spliced back out so a contained ``<iframe>`` becomes a
+    Markdown iframe line.
+    """
+
+    storage = (
+        '<p>Before.</p>'
+        '<ac:structured-macro ac:name="html-bobswift">'
+        '<ac:plain-text-body><![CDATA[<iframe '
+        'src="https://viewer.diagrams.net/?edit=_blank#G123" '
+        'width="800" height="600" frameborder="0"></iframe>]]>'
+        '</ac:plain-text-body>'
+        "</ac:structured-macro>"
+        "<p>After.</p>"
+    )
+    md = storage_to_markdown(storage)
+    assert "Before." in md and "After." in md
+    assert '<iframe' in md
+    assert 'src="https://viewer.diagrams.net/?edit=_blank#G123"' in md
+    assert 'width="800"' in md
+    assert 'height="600"' in md
+
+
+def test_push_iframe_wraps_in_html_bobswift():
+    md = (
+        'Hello.\n\n'
+        '<iframe src="https://viewer.diagrams.net/#G123" '
+        'width="800" height="600" frameborder="0"></iframe>\n\n'
+        'World.\n'
+    )
+    storage = markdown_to_storage(md)
+    assert 'ac:name="html-bobswift"' in storage
+    assert '<ac:plain-text-body><![CDATA[<iframe' in storage
+    assert 'src="https://viewer.diagrams.net/#G123"' in storage
+    assert "<p>Hello.</p>" in storage
+    assert "<p>World.</p>" in storage
+
+
+def test_iframe_full_round_trip():
+    storage = (
+        '<ac:structured-macro ac:name="html-bobswift">'
+        '<ac:plain-text-body><![CDATA[<iframe '
+        'src="https://viewer.diagrams.net/?edit=_blank#Gabc" '
+        'width="800" height="600" frameborder="0" allowfullscreen></iframe>]]>'
+        '</ac:plain-text-body>'
+        "</ac:structured-macro>"
+    )
+    md = storage_to_markdown(storage)
+    back = markdown_to_storage(md)
+    assert 'ac:name="html-bobswift"' in back
+    assert 'src="https://viewer.diagrams.net/?edit=_blank#Gabc"' in back
+    assert 'width="800"' in back
+    assert 'height="600"' in back
+    assert 'frameborder="0"' in back
+    assert 'allowfullscreen' in back
+
+
+def test_iframe_rejects_unsafe_src_on_pull():
+    storage = '<p>hi</p><iframe src="javascript:alert(1)"></iframe>'
+    md = storage_to_markdown(storage)
+    # Iframe is dropped entirely – never leaks ``javascript:``.
+    assert "javascript" not in md
+    assert "<iframe" not in md
+    assert "hi" in md
+
+
+def test_iframe_rejects_unsafe_src_on_push():
+    md = '<iframe src="javascript:alert(1)"></iframe>\n'
+    storage = markdown_to_storage(md)
+    assert "javascript" not in storage
+    # No html-bobswift wrapper should be emitted for a dropped iframe.
+    assert "html-bobswift" not in storage
+
+
+def test_iframe_strips_non_allowlisted_attributes():
+    """Attributes outside the allow-list (e.g. ``onload``) must not
+    survive the push conversion as live attributes.
+    """
+
+    md = (
+        '<iframe src="https://example.com/d" onload="alert(1)" '
+        'sandbox="allow-scripts" width="200"></iframe>\n'
+    )
+    storage = markdown_to_storage(md)
+    # The iframe must be wrapped in html-bobswift (proving the line was
+    # recognised as an iframe block) …
+    assert "html-bobswift" in storage
+    assert 'src="https://example.com/d"' in storage
+    assert 'width="200"' in storage
+    # … and the non-allow-listed attributes must be dropped.
+    assert "onload" not in storage
+    assert "sandbox" not in storage
+    assert "alert" not in storage
+
+
+def test_bare_iframe_pull_round_trip():
+    """An ``<iframe>`` directly in the storage XHTML (no wrapping
+    macro) must also survive a pull + push round trip.  On push we
+    always wrap in ``html-bobswift`` so Confluence renders the embed.
+    """
+
+    storage = (
+        '<p>Before.</p>'
+        '<iframe src="https://example.com/diagram" width="400" '
+        'height="300"></iframe>'
+        "<p>After.</p>"
+    )
+    md = storage_to_markdown(storage)
+    assert '<iframe src="https://example.com/diagram"' in md
+    back = markdown_to_storage(md)
+    assert 'ac:name="html-bobswift"' in back
+    assert 'src="https://example.com/diagram"' in back

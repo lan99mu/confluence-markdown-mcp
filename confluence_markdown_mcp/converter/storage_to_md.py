@@ -34,6 +34,12 @@ class _StorageParser(HTMLParser):
         # coloured <span>) ends.  ``""`` means the tag carried no style and
         # should be a no-op on close.
         self._style_stack: List[str] = []
+        # Per-block alignment stacks: one entry is pushed for every opened
+        # ``<p>`` / ``<hN>`` tag so the corresponding closer can know
+        # whether to emit an alignment-preserving wrapper.  A ``""`` value
+        # means the block had no alignment and needs no special handling.
+        self._para_align_stack: List[str] = []
+        self._heading_align_stack: List[str] = []
 
         # Table state.
         self._in_table = False
@@ -79,11 +85,22 @@ class _StorageParser(HTMLParser):
 
         if tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
             level = int(tag[1])
+            align = _extract_align(attrs_dict.get("style", ""))
             self._emit("\n\n" + "#" * level + " ")
+            # Markdown has no native syntax for heading alignment; preserve
+            # the information via an inline span so it can round-trip.
+            self._heading_align_stack.append(align)
+            if align:
+                self._emit(f'<span style="text-align: {align}">')
             return
 
         if tag == "p":
-            self._emit("\n\n")
+            align = _extract_align(attrs_dict.get("style", ""))
+            self._para_align_stack.append(align)
+            if align:
+                self._emit(f'\n\n<p style="text-align: {align}">')
+            else:
+                self._emit("\n\n")
             return
 
         if tag == "br":
@@ -118,9 +135,9 @@ class _StorageParser(HTMLParser):
             return
 
         if tag == "span":
-            color = _extract_color(attrs_dict.get("style", ""))
-            if color:
-                self._emit(f'<span style="color: {color}">')
+            style_value = _build_span_style(attrs_dict.get("style", ""))
+            if style_value:
+                self._emit(f'<span style="{style_value}">')
                 self._style_stack.append("</span>")
             else:
                 self._style_stack.append("")
@@ -128,10 +145,13 @@ class _StorageParser(HTMLParser):
 
         if tag == "font":
             color = attrs_dict.get("color", "").strip()
-            if not color:
-                color = _extract_color(attrs_dict.get("style", ""))
-            if color:
-                self._emit(f'<span style="color: {color}">')
+            style_value = ""
+            if color and _SAFE_COLOR_RE.match(color):
+                style_value = f"color: {color}"
+            else:
+                style_value = _build_span_style(attrs_dict.get("style", ""))
+            if style_value:
+                self._emit(f'<span style="{style_value}">')
                 self._style_stack.append("</span>")
             else:
                 self._style_stack.append("")
@@ -179,6 +199,15 @@ class _StorageParser(HTMLParser):
                 self._row_is_header = True
             return
 
+        if tag == "iframe":
+            rendered = _render_iframe(attrs_dict)
+            if rendered:
+                self._emit(f"\n\n{rendered}\n\n")
+            # Skip any (unexpected) children – an ``<iframe>`` is supposed
+            # to be empty, and we've already serialised it ourselves.
+            self._skip_depth = 1
+            return
+
         if tag == "blockquote":
             # Open a blockquote segment – we append "> " at line starts via
             # a simple scheme: push a marker that handle_data uses.  Since
@@ -199,10 +228,17 @@ class _StorageParser(HTMLParser):
             return
 
         if tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
+            align = self._heading_align_stack.pop() if self._heading_align_stack else ""
+            if align:
+                self._emit("</span>")
             self._emit("\n\n")
             return
         if tag == "p":
-            self._emit("\n\n")
+            align = self._para_align_stack.pop() if self._para_align_stack else ""
+            if align:
+                self._emit("</p>\n\n")
+            else:
+                self._emit("\n\n")
             return
         if tag in ("strong", "b"):
             self._emit("**")
@@ -325,6 +361,26 @@ def _normalise_cell(text: str) -> str:
 
 
 _COLOR_RE = re.compile(r"(?i)color\s*:\s*([^;]+?)\s*(?:;|$)")
+_BG_COLOR_RE = re.compile(r"(?i)background-color\s*:\s*([^;]+?)\s*(?:;|$)")
+_ALIGN_RE = re.compile(r"(?i)text-align\s*:\s*([^;]+?)\s*(?:;|$)")
+_SAFE_ALIGN = {"left", "right", "center", "justify"}
+
+
+def _extract_align(style: str) -> str:
+    """Return a normalised ``text-align`` value from a ``style`` attribute.
+
+    Only allow-listed values (``left``/``right``/``center``/``justify``) are
+    returned.  Anything else is dropped to avoid leaking arbitrary CSS.
+    """
+
+    if not style:
+        return ""
+    match = _ALIGN_RE.search(style)
+    if not match:
+        return ""
+    value = match.group(1).strip().lower()
+    return value if value in _SAFE_ALIGN else ""
+
 
 # Allow-list of safe CSS colour values.  Restricting to these formats
 # prevents CSS injection via crafted ``style`` attributes (e.g. smuggling
@@ -360,6 +416,129 @@ def _extract_color(style: str) -> str:
     if not _SAFE_COLOR_RE.match(color):
         return ""
     return color
+
+
+def _extract_background_color(style: str) -> str:
+    """Return a safe CSS ``background-color`` value from ``style``."""
+
+    if not style:
+        return ""
+    match = _BG_COLOR_RE.search(style)
+    if not match:
+        return ""
+    color = match.group(1).strip()
+    if not _SAFE_COLOR_RE.match(color):
+        return ""
+    return color
+
+
+def _build_span_style(style: str) -> str:
+    """Compose a sanitised ``style`` attribute value preserving colour
+    and background-colour declarations from a Confluence ``<span>``.
+
+    Returns an empty string when nothing safe is left after filtering –
+    the caller can then skip emitting the wrapper entirely.
+    """
+
+    parts: List[str] = []
+    color = _extract_color(style)
+    if color:
+        parts.append(f"color: {color}")
+    bg = _extract_background_color(style)
+    if bg:
+        parts.append(f"background-color: {bg}")
+    return "; ".join(parts)
+
+
+# -------------------------------------------------------------- iframes
+# Diagrams (drawio / diagrams.net), Confluence native diagrams and other
+# embeds are frequently rendered as ``<iframe>`` elements.  Markdown has
+# no native syntax for them, but we preserve the iframe verbatim so that
+# a pull → edit → push cycle does not lose the embed.  Attributes are
+# filtered to an allow-list and the ``src`` URL is sanitised to ``http``
+# / ``https`` only to avoid smuggling ``javascript:`` or other dangerous
+# schemes into the output.
+
+_IFRAME_SAFE_ATTRS = (
+    "src",
+    "width",
+    "height",
+    "frameborder",
+    "allowfullscreen",
+    "allow",
+    "title",
+    "name",
+    "scrolling",
+    "style",
+)
+
+# Accept absolute ``http`` / ``https`` URLs and protocol-relative ``//host``
+# URLs – the latter are frequently used by embedded viewers.  Anything
+# else (notably ``javascript:``, ``data:`` or ``file:``) is dropped.
+_SAFE_IFRAME_SRC_RE = re.compile(r"(?i)^(?:https?:)?//[^\s\"'<>]+$|^https?://[^\s\"'<>]+$")
+
+
+def _render_iframe(attrs: dict) -> str:
+    """Serialise an ``<iframe>`` element into a Markdown-safe HTML string.
+
+    Returns an empty string when the ``src`` attribute is missing or uses
+    an unsafe URL scheme – the iframe is then silently dropped.
+    """
+
+    src = (attrs.get("src") or "").strip()
+    if not src or not _SAFE_IFRAME_SRC_RE.match(src):
+        return ""
+
+    rendered_attrs: List[str] = [f'src="{_escape_attr(src)}"']
+    for name in _IFRAME_SAFE_ATTRS:
+        if name == "src":
+            continue
+        if name not in attrs:
+            continue
+        value = attrs.get(name)
+        if name == "style":
+            sanitised_style = _build_span_style(value or "")
+            align = _extract_align(value or "")
+            pieces: List[str] = []
+            if sanitised_style:
+                pieces.append(sanitised_style)
+            if align:
+                pieces.append(f"text-align: {align}")
+            if not pieces:
+                continue
+            value = "; ".join(pieces)
+        elif name in ("width", "height"):
+            # Only accept positive integers or CSS lengths – strip units to
+            # digits / ``px`` / ``%`` to keep the output tidy.
+            if value is None:
+                continue
+            stripped = str(value).strip()
+            if not re.match(r"^\d+(?:\.\d+)?(?:px|%)?$", stripped):
+                continue
+            value = stripped
+        elif name == "allowfullscreen":
+            # Boolean attribute – HTMLParser yields ``None`` for bare
+            # attributes; normalise to ``allowfullscreen``.
+            rendered_attrs.append("allowfullscreen")
+            continue
+        else:
+            if value is None:
+                continue
+            value = str(value)
+        rendered_attrs.append(f'{name}="{_escape_attr(value)}"')
+
+    return f"<iframe {' '.join(rendered_attrs)}></iframe>"
+
+
+def _escape_attr(value: str) -> str:
+    """Minimal quote-aware escaper for attribute values."""
+
+    return (
+        value.replace("&", "&amp;")
+        .replace('"', "&quot;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
 
 
 def storage_to_markdown(storage_html: str) -> str:
