@@ -444,22 +444,17 @@ class _BlockRenderer:
             cursor = 0
             emitted_any = False
             for match in _IFRAME_SCAN_RE.finditer(content):
-                attrs = parse_iframe_markup(match.group(0)) or {}
-                rendered = render_iframe(attrs)
-                if not rendered:
-                    # Unsafe iframe – drop it entirely, but keep the
-                    # surrounding fragments so the rest of the block
-                    # is preserved.
-                    before = content[cursor:match.start()]
-                    if before.strip():
-                        self.out.append(before)
-                        emitted_any = True
-                    cursor = match.end()
-                    continue
                 before = content[cursor:match.start()]
                 if before.strip():
                     self.out.append(before)
                     emitted_any = True
+                cursor = match.end()
+                attrs = parse_iframe_markup(match.group(0)) or {}
+                rendered = render_iframe(attrs)
+                if not rendered:
+                    # Unsafe iframe – drop it entirely; surrounding
+                    # fragments have already been preserved above.
+                    continue
                 safe_body = rendered.replace("]]>", "]]]]><![CDATA[>")
                 self.out.append(
                     '<ac:structured-macro ac:name="html-bobswift">'
@@ -467,7 +462,6 @@ class _BlockRenderer:
                     "</ac:structured-macro>"
                 )
                 emitted_any = True
-                cursor = match.end()
             tail = content[cursor:]
             if tail.strip():
                 self.out.append(tail)
