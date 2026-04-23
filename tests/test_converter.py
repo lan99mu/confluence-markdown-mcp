@@ -448,6 +448,54 @@ def test_bare_iframe_pull_round_trip():
     assert 'src="https://example.com/diagram"' in back
 
 
+def test_push_iframe_without_blank_lines_still_wrapped():
+    """When the user writes an ``<iframe>`` without surrounding blank
+    lines markdown-it folds it into a larger html_block alongside the
+    neighbouring text.  We must still wrap the iframe in an
+    ``html-bobswift`` macro – emitting a raw ``<iframe>`` into
+    Confluence storage is rejected by the server.
+    """
+
+    md = (
+        '<iframe src="https://example.com/pic.png" width="800"></iframe>\n'
+        'more text\n'
+    )
+    storage = markdown_to_storage(md)
+    assert 'ac:name="html-bobswift"' in storage
+    assert '<ac:plain-text-body><![CDATA[<iframe' in storage
+    assert 'src="https://example.com/pic.png"' in storage
+    # The raw iframe tag must never leak through unwrapped.
+    assert '<iframe' not in storage.replace(
+        '<![CDATA[<iframe', ''
+    )
+
+
+def test_push_multiple_iframes_in_one_block_each_wrapped():
+    md = (
+        '<iframe src="https://a.example.com/x.png"></iframe>\n'
+        '<iframe src="https://b.example.com/y.png"></iframe>\n'
+    )
+    storage = markdown_to_storage(md)
+    assert storage.count('ac:name="html-bobswift"') == 2
+    assert 'src="https://a.example.com/x.png"' in storage
+    assert 'src="https://b.example.com/y.png"' in storage
+
+
+def test_push_iframe_adjacent_text_unsafe_src_dropped():
+    """An unsafe-src iframe embedded in a larger html_block must be
+    dropped while the surrounding text is preserved.
+    """
+
+    md = (
+        '<iframe src="javascript:alert(1)"></iframe>\n'
+        'keep me\n'
+    )
+    storage = markdown_to_storage(md)
+    assert 'javascript' not in storage
+    assert 'html-bobswift' not in storage
+    assert 'keep me' in storage
+
+
 def test_single_column_table_round_trip():
     """Single-column tables emitted by ``storage_to_markdown`` (``| --- |``
     separator) must round-trip back to a ``<table>`` – otherwise the cell
