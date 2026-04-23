@@ -47,7 +47,7 @@ _IFRAME_COLOR_PROPS = frozenset({
     "color", "background-color", "border-color", "background",
 })
 _SAFE_STYLE_VALUE_RE = re.compile(
-    r"^[A-Za-z0-9 #,.\-%_/]+$"
+    r"^[A-Za-z0-9 #,.\-%_]+$"
 )
 
 
