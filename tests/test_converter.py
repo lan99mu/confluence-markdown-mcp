@@ -448,6 +448,52 @@ def test_bare_iframe_pull_round_trip():
     assert 'src="https://example.com/diagram"' in back
 
 
+def test_push_iframe_preserves_layout_style():
+    """Layout CSS on ``<iframe>`` (border/margin/max-width/display etc.)
+    must survive the push sanitiser — previously only colour/align was
+    kept and everything else was silently dropped.
+    """
+
+    md = (
+        '<iframe src="https://example.com/d" '
+        'style="border: none; max-width: 100%; margin: 0 auto; display: block">'
+        '</iframe>\n'
+    )
+    storage = markdown_to_storage(md)
+    assert "html-bobswift" in storage
+    assert "border: none" in storage
+    assert "max-width: 100%" in storage
+    assert "margin: 0 auto" in storage
+    assert "display: block" in storage
+
+
+def test_push_iframe_preserves_dimension_style():
+    md = (
+        '<iframe src="https://example.com/d" '
+        'style="width: 800px; height: 600px"></iframe>\n'
+    )
+    storage = markdown_to_storage(md)
+    assert "width: 800px" in storage
+    assert "height: 600px" in storage
+
+
+def test_push_iframe_style_drops_unsafe_declarations():
+    """Unsafe CSS payloads (``expression(...)``, ``url(javascript:...)``)
+    must never survive, while neighbouring safe declarations are kept.
+    """
+
+    md = (
+        '<iframe src="https://example.com/d" '
+        'style="expression(alert(1)); color: red; '
+        'background: url(javascript:alert(1))"></iframe>\n'
+    )
+    storage = markdown_to_storage(md)
+    assert "expression" not in storage
+    assert "javascript" not in storage
+    assert "url(" not in storage
+    assert "color: red" in storage
+
+
 def test_push_iframe_without_blank_lines_still_wrapped():
     """When the user writes an ``<iframe>`` without surrounding blank
     lines markdown-it folds it into a larger html_block alongside the
