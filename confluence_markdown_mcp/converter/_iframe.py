@@ -14,7 +14,72 @@ import html
 import re
 from typing import Dict, Optional
 
-from ._style import build_span_style, extract_align
+from ._style import SAFE_ALIGN_VALUES, SAFE_COLOR_RE
+
+# --- iframe-specific style allow-list ----------------------------------
+#
+# ``_style.build_span_style`` is intentionally restrictive — it is meant
+# for inline ``<span>`` wrappers.  Iframes, however, legitimately carry
+# layout CSS such as ``border``, ``max-width``, ``display: block``, or
+# ``margin: 0 auto``.  The generic sanitiser strips all of those, which
+# caused user-authored iframe ``style`` attributes to disappear after a
+# push.  We keep a slightly broader, but still tightly validated,
+# allow-list here.
+#
+# A declaration is kept only if **both** the property name is in
+# ``_IFRAME_STYLE_PROPS`` **and** its value matches ``_SAFE_STYLE_VALUE_RE``
+# (printable ASCII, no parentheses, no ``@``/``\\``/``;``/``"``/``'``, no
+# ``url(...)``/``expression(...)`` payloads, no newlines).  Colour-bearing
+# properties additionally go through the stricter ``SAFE_COLOR_RE`` from
+# ``_style`` so crafted values cannot smuggle arbitrary tokens.
+_IFRAME_STYLE_PROPS = frozenset({
+    "width", "max-width", "min-width",
+    "height", "max-height", "min-height",
+    "margin", "margin-top", "margin-right", "margin-bottom", "margin-left",
+    "padding", "padding-top", "padding-right", "padding-bottom", "padding-left",
+    "border", "border-width", "border-style", "border-radius",
+    "border-top", "border-right", "border-bottom", "border-left",
+    "display", "float", "clear", "vertical-align", "text-align",
+    "background", "background-color", "border-color", "color",
+    "box-sizing", "overflow",
+})
+_IFRAME_COLOR_PROPS = frozenset({
+    "color", "background-color", "border-color", "background",
+})
+_SAFE_STYLE_VALUE_RE = re.compile(
+    r"^[A-Za-z0-9 #,.\-%_]+$"
+)
+
+
+def _sanitise_iframe_style(style: str) -> str:
+    """Return an iframe-safe ``style`` value composed of allow-listed
+    declarations, or ``""`` if nothing safe remains.
+    """
+
+    if not style:
+        return ""
+    kept: list[str] = []
+    for raw in style.split(";"):
+        if ":" not in raw:
+            continue
+        prop, _, value = raw.partition(":")
+        prop = prop.strip().lower()
+        value = value.strip()
+        if not prop or not value:
+            continue
+        if prop not in _IFRAME_STYLE_PROPS:
+            continue
+        if not _SAFE_STYLE_VALUE_RE.match(value):
+            continue
+        if prop in _IFRAME_COLOR_PROPS:
+            if not SAFE_COLOR_RE.match(value):
+                continue
+        if prop == "text-align":
+            if value.lower() not in SAFE_ALIGN_VALUES:
+                continue
+            value = value.lower()
+        kept.append(f"{prop}: {value}")
+    return "; ".join(kept)
 
 SAFE_ATTRS = (
     "src",
@@ -93,16 +158,9 @@ def render_iframe(attrs: Dict[str, Optional[str]]) -> str:
             continue
         value = str(value)
         if name == "style":
-            sanitised = build_span_style(value)
-            align = extract_align(value)
-            pieces = []
-            if sanitised:
-                pieces.append(sanitised)
-            if align:
-                pieces.append(f"text-align: {align}")
-            if not pieces:
+            value = _sanitise_iframe_style(value)
+            if not value:
                 continue
-            value = "; ".join(pieces)
         elif name in ("width", "height"):
             stripped = value.strip()
             if not _SAFE_DIMENSION_RE.match(stripped):

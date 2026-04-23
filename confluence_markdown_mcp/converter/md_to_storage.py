@@ -105,6 +105,15 @@ _IFRAME_BLOCK_RE = re.compile(
     r"^\s*<iframe\b[^>]*>\s*</iframe>\s*$|^\s*<iframe\b[^>]*/\s*>\s*$",
     re.IGNORECASE | re.DOTALL,
 )
+# Non-anchored scanner: finds individual ``<iframe ...></iframe>`` (or
+# self-closing ``<iframe .../>``) tags inside a larger html_block so
+# we can still wrap them in an ``html-bobswift`` macro even when the
+# user didn't leave blank lines around the iframe.  Confluence storage
+# format does not accept raw ``<iframe>``.
+_IFRAME_SCAN_RE = re.compile(
+    r"<iframe\b[^>]*?(?:/\s*>|>\s*</iframe\s*>)",
+    re.IGNORECASE | re.DOTALL,
+)
 _SPAN_OPEN_RE = re.compile(
     r'^<span\s+style="(?P<style>[^"<>]*)"\s*>$',
     re.IGNORECASE,
@@ -422,6 +431,43 @@ class _BlockRenderer:
                 "</ac:structured-macro>"
             )
             return
+
+        # Iframe(s) embedded inside a larger html_block – e.g. the
+        # user didn't leave blank lines around the embed, so
+        # markdown-it rolled the iframe together with neighbouring
+        # text into one html_block.  Confluence storage format does
+        # not allow raw ``<iframe>``, so we still have to extract
+        # each iframe and wrap it in an ``html-bobswift`` macro.
+        # Non-iframe fragments are emitted verbatim (same fallback
+        # as the catch-all branch below).
+        if _IFRAME_SCAN_RE.search(content):
+            cursor = 0
+            emitted_any = False
+            for match in _IFRAME_SCAN_RE.finditer(content):
+                before = content[cursor:match.start()]
+                if before.strip():
+                    self.out.append(before)
+                    emitted_any = True
+                cursor = match.end()
+                attrs = parse_iframe_markup(match.group(0)) or {}
+                rendered = render_iframe(attrs)
+                if not rendered:
+                    # Unsafe iframe – drop it entirely; surrounding
+                    # fragments have already been preserved above.
+                    continue
+                safe_body = rendered.replace("]]>", "]]]]><![CDATA[>")
+                self.out.append(
+                    '<ac:structured-macro ac:name="html-bobswift">'
+                    f"<ac:plain-text-body><![CDATA[{safe_body}]]></ac:plain-text-body>"
+                    "</ac:structured-macro>"
+                )
+                emitted_any = True
+            tail = content[cursor:]
+            if tail.strip():
+                self.out.append(tail)
+                emitted_any = True
+            if emitted_any:
+                return
 
         # Unknown-macro placeholders that happened to land as their own
         # block paragraph (HTML comments).  They'll be restored later.
