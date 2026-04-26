@@ -19,7 +19,7 @@ _DECODE = {char: idx for idx, char in enumerate(_ALPHABET)}
 _BYTES_PER_CHUNK = 3
 _CHARS_PER_CHUNK = 4
 _PLANTUML_URL_RE = re.compile(
-    r"^https://www\.plantuml\.com/plantuml/(?:svg|png|txt)/(?P<data>[0-9A-Za-z\-_]+)$"
+    r"^https://www\.plantuml\.com/plantuml/svg/(?P<data>[0-9A-Za-z\-_]+)$"
 )
 
 
@@ -41,8 +41,8 @@ def plantuml_iframe(markup: str) -> str:
 def decode_plantuml_url(src: str) -> Optional[str]:
     """Decode supported PlantUML server URLs back to source text.
 
-    Returns ``None`` when ``src`` is not a generated PlantUML svg/png/txt URL
-    or when its encoded payload is invalid.
+    Returns ``None`` when ``src`` is not a generated PlantUML SVG URL or when
+    its encoded payload is invalid.
     """
 
     match = _PLANTUML_URL_RE.match((src or "").strip())
@@ -58,8 +58,8 @@ def decode_plantuml_url(src: str) -> Optional[str]:
 def _encode_plantuml(markup: str) -> str:
     """Encode source text with PlantUML's raw-deflate URL alphabet."""
 
-    # PlantUML's URL format uses raw deflate, so strip zlib's 2-byte header
-    # and trailing 4-byte ADLER32 checksum from Python's compressed payload.
+    # PlantUML's server expects raw deflate in URLs, so strip zlib's 2-byte
+    # header and trailing 4-byte ADLER32 checksum from Python's payload.
     compressed = zlib.compress(markup.encode("utf-8"))[2:-4]
     chunks = []
     for i in range(0, len(compressed), _BYTES_PER_CHUNK):
@@ -89,7 +89,7 @@ def _decode_plantuml(encoded: str) -> bytes:
         end = i + _CHARS_PER_CHUNK
         chunk = encoded[i:end]
         if len(chunk) < 2:
-            raise ValueError("invalid PlantUML payload")
+            raise ValueError("invalid PlantUML payload: incomplete chunk")
         c1 = _DECODE[chunk[0]]
         c2 = _DECODE[chunk[1]]
         c3 = _DECODE[chunk[2]] if len(chunk) > 2 else 0

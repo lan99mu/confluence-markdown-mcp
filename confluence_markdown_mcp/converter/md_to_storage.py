@@ -193,6 +193,8 @@ class _BlockRenderer:
         if code.endswith("\n"):
             code = code[:-1]
         if _is_plantuml_language(raw_language):
+            # The source is deflated into a safe URL alphabet before the iframe
+            # enters CDATA, so only the generated iframe markup needs escaping.
             self.out.append(_render_html_bobswift(plantuml_iframe(code)))
             return
         safe = code.replace("]]>", "]]]]><![CDATA[>")
