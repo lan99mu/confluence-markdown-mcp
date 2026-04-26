@@ -123,6 +123,9 @@ _INLINE_HTML_PASSTHROUGH = re.compile(
     re.IGNORECASE,
 )
 _BR_RE = re.compile(r"^<br\s*/?\s*>$", re.IGNORECASE)
+_CODE_LANGUAGE_FALLBACKS = {
+    "json": "javascript",
+}
 
 
 class _BlockRenderer:
@@ -182,7 +185,7 @@ class _BlockRenderer:
 
     def _do_fence(self, tok: Token) -> None:
         self.i += 1
-        language = (tok.info or "").strip()
+        language = _normalise_code_language((tok.info or "").strip())
         code = tok.content
         if code.endswith("\n"):
             code = code[:-1]
@@ -502,7 +505,7 @@ def _render_inline(children: List[Token]) -> str:
         if ty == "text":
             buf.append(html.escape(t.content))
         elif ty == "softbreak":
-            buf.append(" ")
+            buf.append("<br/>")
         elif ty == "hardbreak":
             buf.append("<br/>")
         elif ty == "code_inline":
@@ -566,6 +569,10 @@ def _plain_text(tok: Token) -> str:
     if tok.children:
         return "".join(_plain_text(c) for c in tok.children)
     return ""
+
+
+def _normalise_code_language(language: str) -> str:
+    return _CODE_LANGUAGE_FALLBACKS.get(language.lower(), language)
 
 
 # ---------------------------------------------------------------------------
