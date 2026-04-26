@@ -24,6 +24,12 @@ _PLANTUML_URL_RE = re.compile(
 
 
 def plantuml_iframe(markup: str) -> str:
+    """Return an ``html-bobswift``-safe iframe for PlantUML source text.
+
+    The iframe points at the PlantUML SVG endpoint and carries fixed display
+    attributes that are already accepted by the shared iframe sanitiser.
+    """
+
     encoded = _encode_plantuml(markup)
     return (
         f'<iframe src="{PLANTUML_SERVER}/svg/{encoded}" '
@@ -33,6 +39,12 @@ def plantuml_iframe(markup: str) -> str:
 
 
 def decode_plantuml_url(src: str) -> Optional[str]:
+    """Decode supported PlantUML server URLs back to source text.
+
+    Returns ``None`` when ``src`` is not a generated PlantUML svg/png/txt URL
+    or when its encoded payload is invalid.
+    """
+
     match = _PLANTUML_URL_RE.match((src or "").strip())
     if not match:
         return None
@@ -44,6 +56,8 @@ def decode_plantuml_url(src: str) -> Optional[str]:
 
 
 def _encode_plantuml(markup: str) -> str:
+    """Encode source text with PlantUML's raw-deflate URL alphabet."""
+
     # PlantUML's URL format uses raw deflate, so strip zlib's 2-byte header
     # and trailing 4-byte ADLER32 checksum from Python's compressed payload.
     compressed = zlib.compress(markup.encode("utf-8"))[2:-4]
@@ -68,6 +82,8 @@ def _encode_plantuml(markup: str) -> str:
 
 
 def _decode_plantuml(encoded: str) -> bytes:
+    """Reverse PlantUML's custom base64-like URL alphabet to deflated bytes."""
+
     out = bytearray()
     for i in range(0, len(encoded), _CHARS_PER_CHUNK):
         end = i + _CHARS_PER_CHUNK

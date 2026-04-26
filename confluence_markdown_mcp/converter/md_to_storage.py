@@ -572,7 +572,9 @@ def _normalise_code_language(language: str) -> str:
 
 
 def _is_plantuml_language(language: str) -> bool:
-    return language.lower().split(maxsplit=1)[0] in _PLANTUML_LANGUAGES if language else False
+    if not language:
+        return False
+    return language.lower().split(maxsplit=1)[0] in _PLANTUML_LANGUAGES
 
 
 def _render_html_bobswift(raw_html: str) -> str:
