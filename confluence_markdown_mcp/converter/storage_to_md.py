@@ -19,6 +19,7 @@ from typing import List, Optional
 from lxml import etree, html as lxml_html
 
 from ._iframe import render_iframe
+from ._plantuml import decode_plantuml_url
 from ._style import build_span_style, extract_align
 from .macros import postprocess_markdown, preprocess_storage
 
@@ -359,6 +360,10 @@ class _Renderer:
     # -------------------------------------------------------------- iframe
     def _tag_iframe(self, el) -> None:
         attrs = {k: v for k, v in el.attrib.items()}
+        plantuml = decode_plantuml_url(attrs.get("src", ""))
+        if plantuml is not None:
+            self._emit(f"\n\n```plantuml\n{plantuml.rstrip()}\n```\n\n")
+            return
         rendered = render_iframe(attrs)
         if rendered:
             self._emit(f"\n\n{rendered}\n\n")

@@ -27,6 +27,9 @@ import os
 import re
 from typing import Iterable, List, Set, Tuple
 
+from ._iframe import parse_iframe_markup
+from ._plantuml import decode_plantuml_url
+
 # ---- Recognised admonition macros ---------------------------------------
 ADMONITIONS = ("info", "note", "warning", "tip")
 ADMONITION_LABELS = {
@@ -189,6 +192,11 @@ def _render_html_macro(body: str) -> str:
     raw = raw.strip()
     if not raw:
         return ""
+    attrs = parse_iframe_markup(raw)
+    if attrs:
+        plantuml = decode_plantuml_url(attrs.get("src", ""))
+        if plantuml is not None:
+            return f"\n\n```plantuml\n{plantuml.rstrip()}\n```\n\n"
     # Preserve surrounding blank lines so the embed is treated as its
     # own block when the HTML parser sees it.
     return f"\n\n{raw}\n\n"

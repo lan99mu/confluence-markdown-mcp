@@ -25,6 +25,7 @@ from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
 from ._iframe import parse_iframe_markup, render_iframe
+from ._plantuml import plantuml_iframe
 from ._style import SAFE_ALIGN_VALUES, build_span_style, extract_align
 from .macros import (
     ADMONITIONS,
@@ -185,10 +186,14 @@ class _BlockRenderer:
 
     def _do_fence(self, tok: Token) -> None:
         self.i += 1
-        language = _normalise_code_language((tok.info or "").strip())
+        raw_language = (tok.info or "").strip()
+        language = _normalise_code_language(raw_language)
         code = tok.content
         if code.endswith("\n"):
             code = code[:-1]
+        if _is_plantuml_language(raw_language):
+            self.out.append(_render_html_bobswift(plantuml_iframe(code)))
+            return
         safe = code.replace("]]>", "]]]]><![CDATA[>")
         lang_xml = (
             f'<ac:parameter ac:name="language">{html.escape(language, quote=True)}'
@@ -427,12 +432,7 @@ class _BlockRenderer:
             rendered = render_iframe(attrs)
             if not rendered:
                 return
-            safe_body = rendered.replace("]]>", "]]]]><![CDATA[>")
-            self.out.append(
-                '<ac:structured-macro ac:name="html-bobswift">'
-                f"<ac:plain-text-body><![CDATA[{safe_body}]]></ac:plain-text-body>"
-                "</ac:structured-macro>"
-            )
+            self.out.append(_render_html_bobswift(rendered))
             return
 
         # Iframe(s) embedded inside a larger html_block – e.g. the
@@ -458,12 +458,7 @@ class _BlockRenderer:
                     # Unsafe iframe – drop it entirely; surrounding
                     # fragments have already been preserved above.
                     continue
-                safe_body = rendered.replace("]]>", "]]]]><![CDATA[>")
-                self.out.append(
-                    '<ac:structured-macro ac:name="html-bobswift">'
-                    f"<ac:plain-text-body><![CDATA[{safe_body}]]></ac:plain-text-body>"
-                    "</ac:structured-macro>"
-                )
+                self.out.append(_render_html_bobswift(rendered))
                 emitted_any = True
             tail = content[cursor:]
             if tail.strip():
@@ -573,6 +568,19 @@ def _plain_text(tok: Token) -> str:
 
 def _normalise_code_language(language: str) -> str:
     return _CODE_LANGUAGE_FALLBACKS.get(language.lower(), language)
+
+
+def _is_plantuml_language(language: str) -> bool:
+    return language.lower().split(maxsplit=1)[0] in ("plantuml", "puml") if language else False
+
+
+def _render_html_bobswift(raw_html: str) -> str:
+    safe_body = raw_html.replace("]]>", "]]]]><![CDATA[>")
+    return (
+        '<ac:structured-macro ac:name="html-bobswift">'
+        f"<ac:plain-text-body><![CDATA[{safe_body}]]></ac:plain-text-body>"
+        "</ac:structured-macro>"
+    )
 
 
 # ---------------------------------------------------------------------------

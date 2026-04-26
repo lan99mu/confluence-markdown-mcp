@@ -406,6 +406,24 @@ def test_iframe_full_round_trip():
     assert 'allowfullscreen' in back
 
 
+def test_plantuml_fence_pushes_as_html_bobswift_iframe():
+    md = "```plantuml\n@startuml\nAlice -> Bob: hello\n@enduml\n```\n"
+    storage = markdown_to_storage(md)
+    assert 'ac:name="html-bobswift"' in storage
+    assert 'ac:name="plantuml"' not in storage
+    assert '<iframe src="https://www.plantuml.com/plantuml/svg/' in storage
+    assert 'title="PlantUML diagram"' in storage
+
+
+def test_plantuml_iframe_round_trips_to_fence():
+    md = "```plantuml\n@startuml\nAlice -> Bob: hello\n@enduml\n```\n"
+    storage = markdown_to_storage(md)
+    back = storage_to_markdown(storage)
+    assert "```plantuml" in back
+    assert "Alice -> Bob: hello" in back
+    assert "@enduml" in back
+
+
 def test_iframe_rejects_unsafe_src_on_pull():
     storage = '<p>hi</p><iframe src="javascript:alert(1)"></iframe>'
     md = storage_to_markdown(storage)
