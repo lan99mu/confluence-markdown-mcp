@@ -236,6 +236,21 @@ def test_push_preserves_linebreak_tag():
     assert "&lt;br" not in storage
 
 
+def test_push_preserves_markdown_soft_linebreak():
+    md = "line one\nline two\n"
+    storage = markdown_to_storage(md)
+    assert "<p>line one<br/>line two</p>" in storage
+
+
+def test_json_fence_downgrades_to_javascript_code_macro():
+    md = '```json\n{"ok": true}\n```\n'
+    storage = markdown_to_storage(md)
+    assert 'ac:name="code"' in storage
+    assert '<ac:parameter ac:name="language">javascript</ac:parameter>' in storage
+    assert "<![CDATA[{\"ok\": true}]]>" in storage
+    assert ">json</ac:parameter>" not in storage
+
+
 def test_push_preserves_background_color_span():
     md = '<span style="background-color: #ffff00">highlight</span>\n'
     storage = markdown_to_storage(md)
