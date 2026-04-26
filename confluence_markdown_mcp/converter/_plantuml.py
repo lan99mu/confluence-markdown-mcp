@@ -38,7 +38,7 @@ def plantuml_iframe(markup: str) -> str:
     )
 
 
-def decode_plantuml_url(src: str) -> Optional[str]:
+def decode_plantuml_url(src: Optional[str]) -> Optional[str]:
     """Decode supported PlantUML server URLs back to source text.
 
     Returns ``None`` when ``src`` is not a generated PlantUML SVG URL or when
