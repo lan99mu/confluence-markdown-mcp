@@ -49,7 +49,8 @@ def _encode_plantuml(markup: str) -> str:
     compressed = zlib.compress(markup.encode("utf-8"))[2:-4]
     chunks = []
     for i in range(0, len(compressed), _BYTES_PER_CHUNK):
-        chunk = compressed[i:i + _BYTES_PER_CHUNK]
+        end = i + _BYTES_PER_CHUNK
+        chunk = compressed[i:end]
         b1 = chunk[0]
         b2 = chunk[1] if len(chunk) > 1 else 0
         b3 = chunk[2] if len(chunk) > 2 else 0
@@ -69,7 +70,8 @@ def _encode_plantuml(markup: str) -> str:
 def _decode_plantuml(encoded: str) -> bytes:
     out = bytearray()
     for i in range(0, len(encoded), _CHARS_PER_CHUNK):
-        chunk = encoded[i:i + _CHARS_PER_CHUNK]
+        end = i + _CHARS_PER_CHUNK
+        chunk = encoded[i:end]
         if len(chunk) < 2:
             raise ValueError("invalid PlantUML payload")
         c1 = _DECODE[chunk[0]]
