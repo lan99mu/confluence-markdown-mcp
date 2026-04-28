@@ -183,6 +183,12 @@ class _BlockRenderer:
         text = _render_inline(inline.children or [])
         if not text:
             return
+        # An unknown-macro placeholder must not be wrapped in <p>: Confluence
+        # expects structured macros at block level.  The PUA sentinel will be
+        # substituted back to the macro XML after rendering.
+        if _UNKNOWN_MACRO_PLACEHOLDER_RE.fullmatch(text.strip()):
+            self.out.append(text.strip())
+            return
         self.out.append(f"<p>{text}</p>")
 
     def _do_fence(self, tok: Token) -> None:

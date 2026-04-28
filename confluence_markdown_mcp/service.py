@@ -169,7 +169,7 @@ class ConfluenceService:
             current_version + 1,
         )
         new_version = int(
-            updated.get("version", {}).get("number", current_version + 1) or 0
+            (updated.get("version") or {}).get("number") or (current_version + 1)
         )
         return PushResult(
             page_id=target_id,

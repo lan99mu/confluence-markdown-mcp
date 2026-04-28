@@ -162,7 +162,8 @@ class ConfluenceClient:
             # relative to the wiki context.  ``urljoin`` handles both
             # absolute and context-relative forms.
             base_prefix = "/wiki" if self.is_cloud else ""
-            if download_path.startswith("/wiki/") or download_path.startswith(base_prefix):
+            if base_prefix and download_path.startswith(base_prefix):
+                # Path already includes the /wiki prefix – use as-is.
                 url = f"{self.base_url}{download_path}"
             elif download_path.startswith("/"):
                 url = f"{self.base_url}{base_prefix}{download_path}"
