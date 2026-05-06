@@ -411,7 +411,7 @@ def test_plantuml_fence_pushes_as_html_bobswift_iframe():
     storage = markdown_to_storage(md)
     assert 'ac:name="html-bobswift"' in storage
     assert 'ac:name="plantuml"' not in storage
-    assert '<iframe src="https://www.plantuml.com/plantuml/svg/' in storage
+    assert '<iframe src="https://www.plantuml.com/plantuml/png/' in storage
     assert 'title="PlantUML diagram"' in storage
 
 
