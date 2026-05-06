@@ -2,7 +2,7 @@
 
 The target wiki does not provide a native ``plantuml`` structured macro, but
 it does render iframes wrapped in the ``html-bobswift`` macro.  PlantUML fenced
-code blocks therefore become iframes that point at the public PlantUML SVG
+code blocks therefore become iframes that point at the public PlantUML PNG
 endpoint, and generated URLs can be decoded back into fenced blocks on pull.
 """
 
@@ -19,7 +19,7 @@ _DECODE = {char: idx for idx, char in enumerate(_ALPHABET)}
 _BYTES_PER_CHUNK = 3
 _CHARS_PER_CHUNK = 4
 _PLANTUML_URL_RE = re.compile(
-    r"^https://www\.plantuml\.com/plantuml/svg/(?P<data>[0-9A-Za-z\-_]+)$"
+    r"^https://www\.plantuml\.com/plantuml/png/(?P<data>[0-9A-Za-z\-_]+)$"
 )
 
 
@@ -32,7 +32,7 @@ def plantuml_iframe(markup: str) -> str:
 
     encoded = _encode_plantuml(markup)
     return (
-        f'<iframe src="{PLANTUML_SERVER}/svg/{encoded}" '
+        f'<iframe src="{PLANTUML_SERVER}/png/{encoded}" '
         'width="100%" height="600" frameborder="0" '
         'title="PlantUML diagram"></iframe>'
     )
