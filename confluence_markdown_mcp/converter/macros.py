@@ -170,6 +170,8 @@ def _rewrite_task_lists(storage_html: str) -> str:
 def _render_macro(name: str, body: str) -> str:
     if name == "code":
         return _render_code_macro(body)
+    if name == "markdown":
+        return _render_markdown_macro(body)
     if name in ADMONITIONS:
         return _render_admonition_macro(name, body)
     if name == "html" or name == "html-bobswift":
@@ -209,6 +211,23 @@ def _render_code_macro(body: str) -> str:
     raw = text_match.group("text") if text_match else ""
     # CDATA contents are not HTML-escaped; emit verbatim.
     return f"\n\n```{language}\n{raw.rstrip()}\n```\n\n"
+
+
+def _render_markdown_macro(body: str) -> str:
+    """Expand a Confluence ``markdown`` macro to its raw Markdown body.
+
+    The macro renders any Markdown (including ``mermaid`` fenced code
+    blocks).  The plain-text body already contains Markdown source, so it
+    is spliced back into the stream verbatim — a ``mermaid`` fence pushed
+    via :mod:`md_to_storage` therefore round-trips back to the same fence.
+    """
+
+    text_match = _PLAIN_BODY_RE.search(body)
+    raw = text_match.group("text") if text_match else ""
+    raw = raw.strip("\n")
+    if not raw:
+        return ""
+    return f"\n\n{raw}\n\n"
 
 
 def _render_admonition_macro(name: str, body: str) -> str:

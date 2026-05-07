@@ -424,6 +424,40 @@ def test_plantuml_iframe_round_trips_to_fence():
     assert "@enduml" in back
 
 
+def test_mermaid_fence_pushes_as_markdown_macro():
+    md = "```mermaid\ngraph TD\nA-->B\n```\n"
+    storage = markdown_to_storage(md)
+    assert 'ac:name="markdown"' in storage
+    assert 'ac:name="code"' not in storage
+    # The fenced block (fences included) is preserved inside the macro
+    # body so the Confluence markdown macro can render the diagram.
+    assert "```mermaid" in storage
+    assert "graph TD" in storage
+    assert "A-->B" in storage
+
+
+def test_mermaid_markdown_macro_round_trips_to_fence():
+    md = "```mermaid\ngraph TD\nA-->B\n```\n"
+    storage = markdown_to_storage(md)
+    back = storage_to_markdown(storage)
+    assert "```mermaid" in back
+    assert "graph TD" in back
+    assert "A-->B" in back
+
+
+def test_markdown_macro_pulls_as_raw_markdown():
+    storage = (
+        '<ac:structured-macro ac:name="markdown">'
+        "<ac:plain-text-body><![CDATA[```mermaid\nsequenceDiagram\n"
+        "Alice->>Bob: hi\n```]]></ac:plain-text-body>"
+        "</ac:structured-macro>"
+    )
+    md = storage_to_markdown(storage)
+    assert "```mermaid" in md
+    assert "sequenceDiagram" in md
+    assert "Alice->>Bob: hi" in md
+
+
 def test_iframe_rejects_unsafe_src_on_pull():
     storage = '<p>hi</p><iframe src="javascript:alert(1)"></iframe>'
     md = storage_to_markdown(storage)
