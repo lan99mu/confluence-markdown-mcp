@@ -128,6 +128,7 @@ _CODE_LANGUAGE_FALLBACKS = {
     "json": "javascript",
 }
 _PLANTUML_LANGUAGES = ("plantuml", "puml")
+_MERMAID_LANGUAGES = ("mermaid",)
 
 
 class _BlockRenderer:
@@ -196,6 +197,19 @@ class _BlockRenderer:
             # The PlantUML source is deflated into a safe URL alphabet; the
             # generated iframe markup still gets standard CDATA escaping.
             self.out.append(_render_html_bobswift(plantuml_iframe(code)))
+            return
+        if _is_mermaid_language(raw_language):
+            # Mermaid is rendered by the Confluence ``markdown`` macro: wrap
+            # the fenced block (fences included) so that the macro renders
+            # the diagram, and a round-trip pull restores the same fence.
+            fence_lang = raw_language or "mermaid"
+            mermaid_block = f"```{fence_lang}\n{code}\n```"
+            safe = mermaid_block.replace("]]>", "]]]]><![CDATA[>")
+            self.out.append(
+                '<ac:structured-macro ac:name="markdown">'
+                f"<ac:plain-text-body><![CDATA[{safe}]]></ac:plain-text-body>"
+                "</ac:structured-macro>"
+            )
             return
         safe = code.replace("]]>", "]]]]><![CDATA[>")
         lang_xml = (
@@ -577,6 +591,12 @@ def _is_plantuml_language(language: str) -> bool:
     if not language:
         return False
     return language.lower().split(maxsplit=1)[0] in _PLANTUML_LANGUAGES
+
+
+def _is_mermaid_language(language: str) -> bool:
+    if not language:
+        return False
+    return language.lower().split(maxsplit=1)[0] in _MERMAID_LANGUAGES
 
 
 def _render_html_bobswift(raw_html: str) -> str:

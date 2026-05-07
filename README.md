@@ -156,6 +156,7 @@ confluence-markdown-mcp serve
 | 行内 `<u>`、`<s>`/`<del>`、`<ins>`、`<sub>`、`<sup>`、`<br>` | 原样保留相同标签 |
 | `<a href=...>` / `<img>` | `[text](url)` / `![alt](src)` |
 | `plantuml` / `puml` 代码块 | 上传时不使用 wiki 不支持的 `plantuml` 结构宏，而是生成指向 PlantUML SVG 服务的 `<iframe>`，并用 `html-bobswift` 宏包裹；拉取自身生成的 iframe 时还原为 `plantuml` 代码块 |
+| `mermaid` 代码块 | 上传时包装成 Confluence `markdown` 结构宏（CDATA 中保留完整 ` ```mermaid ` 围栏），由 wiki 的 Markdown 宏渲染图表；拉取 `markdown` 宏时直接将其 `<ac:plain-text-body>` 当作 Markdown 内容输出，从而原样还原 `mermaid` 代码块 |
 | `html` / `html-bobswift` 宏内的 `<iframe>`（drawio / diagrams.net 等） | 拉取时解包为单行 `<iframe …></iframe>`；上传时自动重新用 `html-bobswift` 宏包裹，`src` 限制为 http/https，并剥离 `onload` / `srcdoc` / `sandbox` 等非白名单属性 |
 | 其他未知 `<ac:structured-macro>` | 保留为 HTML 注释 token，上传时原样还原 |
 
