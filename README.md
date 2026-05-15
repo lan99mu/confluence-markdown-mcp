@@ -75,10 +75,48 @@ python -m confluence_markdown_mcp --help
 | `CONFLUENCE_MARKDOWN_DIR` | ❎ | `pull` 时相对路径所依赖的默认目录 |
 | `CONFLUENCE_IS_CLOUD` | ❎ | 是否为 Confluence Cloud；默认 `true`。设为 `false` 时走 Server/Data Center 的 `/rest/api`；Cloud 走 `/wiki/rest/api` |
 
+### macOS / Linux（bash / zsh）
+
 ```bash
 export CONFLUENCE_BASE_URL="https://example.atlassian.net"
 export CONFLUENCE_EMAIL="you@example.com"
 export CONFLUENCE_API_TOKEN="xxxxxxxxxxxx"
+```
+
+如需永久生效，将以上三行追加到 `~/.bashrc`、`~/.zshrc` 或 `~/.profile` 中，然后执行 `source ~/.bashrc`（或对应文件）使其立即生效。
+
+### Windows（命令提示符 CMD）
+
+```cmd
+set CONFLUENCE_BASE_URL=https://example.atlassian.net
+set CONFLUENCE_EMAIL=you@example.com
+set CONFLUENCE_API_TOKEN=xxxxxxxxxxxx
+```
+
+如需永久生效，改用 `setx`（注意 `setx` 设置的变量需要重新打开终端才能读取）：
+
+```cmd
+setx CONFLUENCE_BASE_URL "https://example.atlassian.net"
+setx CONFLUENCE_EMAIL "you@example.com"
+setx CONFLUENCE_API_TOKEN "xxxxxxxxxxxx"
+```
+
+或者在「控制面板 → 系统 → 高级系统设置 → 环境变量」界面添加用户变量。
+
+### Windows（PowerShell）
+
+```powershell
+$env:CONFLUENCE_BASE_URL  = "https://example.atlassian.net"
+$env:CONFLUENCE_EMAIL     = "you@example.com"
+$env:CONFLUENCE_API_TOKEN = "xxxxxxxxxxxx"
+```
+
+如需在 PowerShell 会话间持久化，将以上三行追加到 PowerShell 配置文件（`$PROFILE`）中：
+
+```powershell
+Add-Content $PROFILE "`n`$env:CONFLUENCE_BASE_URL  = `"https://example.atlassian.net`""
+Add-Content $PROFILE "`$env:CONFLUENCE_EMAIL     = `"you@example.com`""
+Add-Content $PROFILE "`$env:CONFLUENCE_API_TOKEN = `"xxxxxxxxxxxx`""
 ```
 
 ## 命令行用法
@@ -113,9 +151,11 @@ confluence-markdown-mcp serve
 
 资源：`confluence://page/{page_id}` — 只读 Markdown 视图。
 
-### Claude Desktop / 通用 MCP 客户端配置
+### Claude Desktop
 
-在客户端的 MCP 配置文件中加入：
+配置文件位置：
+- macOS：`~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows：`%APPDATA%\Claude\claude_desktop_config.json`
 
 ```json
 {
@@ -133,12 +173,112 @@ confluence-markdown-mcp serve
 }
 ```
 
-如未安装为命令，也可以这样启动：
+### Cursor
+
+全局配置文件：`~/.cursor/mcp.json`；也可在项目根目录创建 `.cursor/mcp.json` 仅对当前项目生效。
+
+```json
+{
+  "mcpServers": {
+    "confluence-markdown": {
+      "command": "confluence-markdown-mcp",
+      "args": ["serve"],
+      "env": {
+        "CONFLUENCE_BASE_URL": "https://example.atlassian.net",
+        "CONFLUENCE_EMAIL": "you@example.com",
+        "CONFLUENCE_API_TOKEN": "xxxxxxxxxxxx"
+      }
+    }
+  }
+}
+```
+
+### Windsurf
+
+配置文件位置：`~/.codeium/windsurf/mcp_config.json`
+
+```json
+{
+  "mcpServers": {
+    "confluence-markdown": {
+      "command": "confluence-markdown-mcp",
+      "args": ["serve"],
+      "env": {
+        "CONFLUENCE_BASE_URL": "https://example.atlassian.net",
+        "CONFLUENCE_EMAIL": "you@example.com",
+        "CONFLUENCE_API_TOKEN": "xxxxxxxxxxxx"
+      }
+    }
+  }
+}
+```
+
+### VS Code（GitHub Copilot Agent 模式）
+
+在项目根目录创建 `.vscode/mcp.json`（仅对当前工作区生效），或在用户 `settings.json` 中添加 `mcp.servers` 键（全局生效）。
+
+`.vscode/mcp.json`：
+
+```json
+{
+  "servers": {
+    "confluence-markdown": {
+      "type": "stdio",
+      "command": "confluence-markdown-mcp",
+      "args": ["serve"],
+      "env": {
+        "CONFLUENCE_BASE_URL": "https://example.atlassian.net",
+        "CONFLUENCE_EMAIL": "you@example.com",
+        "CONFLUENCE_API_TOKEN": "xxxxxxxxxxxx"
+      }
+    }
+  }
+}
+```
+
+### Continue（VS Code / JetBrains 插件）
+
+在 `.continue/config.yaml`（或 `config.json`）的 `mcpServers` 数组中添加：
+
+```yaml
+mcpServers:
+  - name: confluence-markdown
+    command: confluence-markdown-mcp
+    args:
+      - serve
+    env:
+      CONFLUENCE_BASE_URL: https://example.atlassian.net
+      CONFLUENCE_EMAIL: you@example.com
+      CONFLUENCE_API_TOKEN: xxxxxxxxxxxx
+```
+
+### 通用备选方案（未全局安装时）
+
+如果尚未将包安装为全局命令，可以改用 `python -m` 方式（将 `python` 替换为实际可执行文件名，例如 `python3`）：
 
 ```json
 {
   "command": "python",
-  "args": ["-m", "confluence_markdown_mcp", "serve"]
+  "args": ["-m", "confluence_markdown_mcp", "serve"],
+  "env": {
+    "CONFLUENCE_BASE_URL": "https://example.atlassian.net",
+    "CONFLUENCE_EMAIL": "you@example.com",
+    "CONFLUENCE_API_TOKEN": "xxxxxxxxxxxx"
+  }
+}
+```
+
+或使用 `uvx` 直接运行（无需手动安装）：
+
+```json
+{
+  "command": "uvx",
+  "args": ["confluence-markdown-mcp", "serve"],
+  "env": {
+    "CONFLUENCE_BASE_URL": "https://example.atlassian.net",
+    "CONFLUENCE_EMAIL": "you@example.com",
+    "CONFLUENCE_API_TOKEN": "xxxxxxxxxxxx"
+  }
 }
 ```
 
