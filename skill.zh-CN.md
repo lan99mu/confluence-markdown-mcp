@@ -29,13 +29,16 @@ Markdown 文件旁边的 `attachments/` 目录，`push_page` 会在更新页面�
 服务器从环境变量读取凭证。首次调用前请与用户确认以下变量已正确设置：
 
 - `CONFLUENCE_BASE_URL` —— 例如 `https://<tenant>.atlassian.net`
-- `CONFLUENCE_EMAIL`    —— Atlassian 账号邮箱
-- `CONFLUENCE_API_TOKEN` —— Atlassian API Token
+- `CONFLUENCE_EMAIL` + `CONFLUENCE_API_TOKEN` —— Basic Auth 所需的账号邮箱与 API Token
+- `CONFLUENCE_PAT` —— Personal Access Token，走 Bearer Auth
 
 可选：
 
 - `CONFLUENCE_TIMEOUT`        —— HTTP 超时（秒），默认 `30`
 - `CONFLUENCE_MARKDOWN_DIR`   —— 相对 `output_dir` 的默认根目录
+
+认证方式二选一：使用 `CONFLUENCE_EMAIL` + `CONFLUENCE_API_TOKEN`，
+或设置 `CONFLUENCE_PAT`。若两者同时存在，优先使用 PAT。
 
 ## 提供的工具
 
@@ -101,7 +104,7 @@ Confluence 中的 drawio / diagrams.net 图通常通过 `html-bobswift` 宏包�
 
 - `RuntimeError: Missing Confluence credentials...` → 提醒用户导出必需的
   环境变量。
-- `ConfluenceError: (401 Unauthorized)` → API Token 无效或已过期。
+- `ConfluenceError: (401 Unauthorized)` → API Token 或 PAT 无效、已过期，或权限不足。
 - `ConfluenceError: (404 Not Found)` → 检查 `page_id` 是否正确。
 - `push_page` 抛出 `FileNotFoundError` → 检查文件的绝对路径是否存在。
 

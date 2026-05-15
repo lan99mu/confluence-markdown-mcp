@@ -41,8 +41,9 @@ def create_server(service: Optional[ConfluenceService] = None) -> FastMCP:
         name="confluence-markdown-mcp",
         instructions=(
             "Pull Confluence wiki pages to local Markdown and push local "
-            "edits back. Configure CONFLUENCE_BASE_URL, CONFLUENCE_EMAIL "
-            "and CONFLUENCE_API_TOKEN in the environment."
+            "edits back. Configure CONFLUENCE_BASE_URL plus either "
+            "CONFLUENCE_EMAIL and CONFLUENCE_API_TOKEN, or CONFLUENCE_PAT, "
+            "in the environment."
         ),
     )
 

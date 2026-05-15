@@ -32,8 +32,9 @@ class ConfluenceClient:
     def __init__(
         self,
         base_url: str,
-        email: str,
-        api_token: str,
+        email: Optional[str] = None,
+        api_token: Optional[str] = None,
+        pat: Optional[str] = None,
         timeout: float = 30.0,
         is_cloud: bool = True,
     ) -> None:
@@ -43,8 +44,15 @@ class ConfluenceClient:
         # Cloud instances serve the REST API under `/wiki/rest/api`, while
         # Server / Data Center installations use `/rest/api` directly.
         self._api_prefix = "/wiki/rest/api" if is_cloud else "/rest/api"
-        auth = f"{email}:{api_token}".encode("utf-8")
-        self._auth_header = "Basic " + base64.b64encode(auth).decode("utf-8")
+        if pat:
+            self._auth_header = f"Bearer {pat}"
+        elif email and api_token:
+            auth = f"{email}:{api_token}".encode("utf-8")
+            self._auth_header = "Basic " + base64.b64encode(auth).decode("utf-8")
+        else:
+            raise ValueError(
+                "ConfluenceClient requires either a PAT or both email and API token."
+            )
 
     # ------------------------------------------------------------------ utils
     @classmethod
@@ -53,6 +61,7 @@ class ConfluenceClient:
             base_url=settings.base_url,
             email=settings.email,
             api_token=settings.api_token,
+            pat=settings.pat,
             timeout=settings.timeout,
             is_cloud=settings.is_cloud,
         )
