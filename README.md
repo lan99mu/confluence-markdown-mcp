@@ -81,6 +81,8 @@ python -m confluence_markdown_mcp --help
 - **Basic Auth**：设置 `CONFLUENCE_EMAIL` + `CONFLUENCE_API_TOKEN`
 - **PAT**：设置 `CONFLUENCE_PAT`
 
+也就是说，只需要满足上述其中一种组合；并不是这三个认证变量都要同时设置。
+
 ### macOS / Linux（bash / zsh）
 
 ```bash

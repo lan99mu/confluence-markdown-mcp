@@ -113,7 +113,7 @@ leak through a round-trip.
 
 - `RuntimeError: Missing Confluence credentials...` → remind the user to
   export the required environment variables.
-- `ConfluenceError: (401 Unauthorized)` → the API token or PAT is invalid/expired.
+- `ConfluenceError: (401 Unauthorized)` → the API token or PAT is invalid, expired, or lacks permission.
 - `ConfluenceError: (404 Not Found)` → double-check the `page_id`.
 - `FileNotFoundError` on `push_page` → verify the absolute file path.
 
