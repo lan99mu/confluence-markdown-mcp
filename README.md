@@ -171,19 +171,19 @@ confluence-markdown-mcp serve
 - `<!--cm-attachment-->` **必须写在链接后面**，写在前面不会被识别。
 - 未加 marker 的普通链接会按普通 `<a href="...">` 处理，不会自动上传为附件。
 - URL 编码路径会先 decode 再处理，因此
-  `attachments/%E5%BC%80%E6%94%BE%E6%97%A5%E9%82%80%E8%AF%B7%E4%BD%A0%E6%8A%95%E9%80%92%E7%AE%80%E5%8E%86.eml`
-  会与本地文件 `attachments/开放日邀请你投递简历.eml` 匹配，并使用同一个附件文件名。
+  `attachments/%E9%99%84%E4%BB%B6%E7%A4%BA%E4%BE%8B.eml`
+  会与本地文件 `attachments/附件示例.eml` 匹配，并使用同一个附件文件名。
 
 正确示例：
 
 ```md
-[开放日邀请你投递简历.eml](attachments/开放日邀请你投递简历.eml) <!--cm-attachment-->
+[附件示例.eml](attachments/附件示例.eml) <!--cm-attachment-->
 ```
 
 错误示例（marker 在前，不会被识别为附件上传）：
 
 ```md
-<!--cm-attachment-->[开放日邀请你投递简历.eml](attachments/开放日邀请你投递简历.eml)
+<!--cm-attachment-->[附件示例.eml](attachments/附件示例.eml)
 ```
 
 ## 作为 MCP 服务使用

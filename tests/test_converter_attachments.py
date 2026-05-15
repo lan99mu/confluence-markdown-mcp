@@ -104,7 +104,7 @@ def test_image_src_with_attachments_subdir_strips_directory():
 def test_image_src_with_urlencoded_filename_decodes_name():
     md = (
         "![cat](attachments/"
-        "%E5%BC%80%E6%94%BE%E6%97%A5%E9%82%80%E8%AF%B7%E4%BD%A0%E6%8A%95%E9%80%92%E7%AE%80%E5%8E%86.eml)"
+        "%E9%99%84%E4%BB%B6%E7%A4%BA%E4%BE%8B.eml)"
     )
     back = markdown_to_storage(md)
-    assert 'ri:filename="开放日邀请你投递简历.eml"' in back
+    assert 'ri:filename="附件示例.eml"' in back
