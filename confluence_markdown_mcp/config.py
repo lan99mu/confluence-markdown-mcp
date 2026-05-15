@@ -43,9 +43,9 @@ class Settings:
     """
 
     base_url: str
-    email: str = ""
-    api_token: str = ""
-    pat: str = ""
+    email: Optional[str] = None
+    api_token: Optional[str] = None
+    pat: Optional[str] = None
     timeout: float = 30.0
     markdown_dir: Optional[str] = None
     is_cloud: bool = True

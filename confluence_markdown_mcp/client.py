@@ -51,7 +51,8 @@ class ConfluenceClient:
             self._auth_header = "Basic " + base64.b64encode(auth).decode("utf-8")
         else:
             raise ValueError(
-                "ConfluenceClient requires either a PAT or both email and API token."
+                "ConfluenceClient requires either 'pat' or both 'email' and "
+                "'api_token'."
             )
 
     # ------------------------------------------------------------------ utils
