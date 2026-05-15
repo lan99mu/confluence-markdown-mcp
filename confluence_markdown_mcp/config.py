@@ -43,8 +43,8 @@ class Settings:
     """
 
     base_url: str
-    email: str
-    api_token: str
+    email: str = ""
+    api_token: str = ""
     pat: str = ""
     timeout: float = 30.0
     markdown_dir: Optional[str] = None
