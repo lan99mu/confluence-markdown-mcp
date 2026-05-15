@@ -17,6 +17,8 @@ from .config import Settings, load_settings
 from .converter import markdown_to_storage, storage_to_markdown
 from .converter.macros import (
     ATTACHMENTS_DIRNAME,
+    attachment_filename_from_ref,
+    decode_local_attachment_path,
     iter_referenced_filenames,
     sanitize_attachment_filename,
 )
@@ -311,19 +313,20 @@ class ConfluenceService:
             seen_targets.add(absolute)
             if not os.path.isfile(absolute):
                 results.append(AttachmentInfo(
-                    filename=sanitize_attachment_filename(os.path.basename(rel)),
+                    filename=attachment_filename_from_ref(rel),
                     action="missing",
                 ))
                 continue
 
-            filename = sanitize_attachment_filename(os.path.basename(absolute))
+            filename = attachment_filename_from_ref(rel)
             info = AttachmentInfo(filename=filename, path=absolute)
             try:
                 info.size = os.path.getsize(absolute)
             except OSError:
                 info.size = None
 
-            existing = remote.get(filename) or remote.get(os.path.basename(rel))
+            raw_name = os.path.basename(decode_local_attachment_path(rel))
+            existing = remote.get(filename) or remote.get(raw_name)
             try:
                 local_hash = file_sha1(absolute)
             except OSError:
@@ -421,16 +424,18 @@ def _collect_local_references(markdown: str) -> List[str]:
     ordered: List[str] = []
     for m in _IMG_LINK_RE.finditer(markdown or ""):
         src = m.group("src").strip()
-        if _is_local_ref(src) and src not in seen:
-            seen.add(src)
-            ordered.append(src)
+        normalized = decode_local_attachment_path(src)
+        if _is_local_ref(src) and normalized and normalized not in seen:
+            seen.add(normalized)
+            ordered.append(normalized)
     for m in _LINK_RE.finditer(markdown or ""):
         if not m.group("marker"):
             continue
         href = m.group("href").strip()
-        if _is_local_ref(href) and href not in seen:
-            seen.add(href)
-            ordered.append(href)
+        normalized = decode_local_attachment_path(href)
+        if _is_local_ref(href) and normalized and normalized not in seen:
+            seen.add(normalized)
+            ordered.append(normalized)
     return ordered
 
 

@@ -54,6 +54,25 @@ def test_attachment_link_round_trip():
     assert "<![CDATA[Download the doc]]>" in back
 
 
+def test_unmarked_attachment_path_stays_plain_link():
+    md = "[Download the doc](attachments/doc.pdf)"
+    back = markdown_to_storage(md)
+    assert '<a href="attachments/doc.pdf">' in back
+    assert "<ri:attachment" not in back
+
+
+def test_attachment_link_with_urlencoded_filename_decodes_name():
+    md = (
+        "[附件](attachments/"
+        "%E9%99%84%E4%BB%B6%E7%A4%BA%E4%BE%8B.eml)"
+        "<!--cm-attachment-->"
+    )
+    back = markdown_to_storage(md)
+    assert (
+        '<ri:attachment ri:filename="附件示例.eml"' in back
+    )
+
+
 def test_orphan_image_comment_is_dropped():
     # If the user removes an image but leaves the marker behind, we must
     # not emit an unsafe HTML comment back to Confluence.
@@ -80,3 +99,12 @@ def test_image_src_with_attachments_subdir_strips_directory():
     back = markdown_to_storage(md)
     assert 'ri:filename="cat.png"' in back
     assert "attachments/" not in back
+
+
+def test_image_src_with_urlencoded_filename_decodes_name():
+    md = (
+        "![cat](attachments/"
+        "%E9%99%84%E4%BB%B6%E7%A4%BA%E4%BE%8B.eml)"
+    )
+    back = markdown_to_storage(md)
+    assert 'ri:filename="附件示例.eml"' in back

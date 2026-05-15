@@ -63,6 +63,19 @@ be omitted if the file carries it in its front matter (which `pull_page`
 writes automatically). `title` defaults to the front-matter title or the
 page's current title.
 
+Attachment upload rules on push:
+
+- Image references are uploaded automatically, for example
+  `![image](attachments/example.png)`.
+- Ordinary file links are uploaded only when the link is immediately
+  followed by `<!--cm-attachment-->`, for example
+  `[file](attachments/example.eml) <!--cm-attachment-->`.
+- The marker must come **after** the link. `<!--cm-attachment-->[file](...)`
+  is not recognised.
+- URL-encoded local paths are decoded before matching and naming the
+  attachment, so an encoded path and the decoded local filename stay in
+  sync on upload and in the page body.
+
 ### `read_page(page_id: string)`
 
 Convenience wrapper around `pull_page` that never writes to disk – returns

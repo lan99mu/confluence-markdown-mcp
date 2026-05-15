@@ -25,6 +25,7 @@ from __future__ import annotations
 import html
 import os
 import re
+import urllib.parse
 from typing import Iterable, List, Set, Tuple
 
 from ._iframe import parse_iframe_markup
@@ -355,6 +356,25 @@ def sanitize_attachment_filename(filename: str, fallback: str = "attachment") ->
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     cleaned = cleaned.lstrip(".")  # avoid accidental hidden files
     return cleaned or fallback
+
+
+def decode_local_attachment_path(ref: str) -> str:
+    """Return the URL-decoded path part of a local Markdown reference."""
+
+    raw = (ref or "").strip()
+    if not raw:
+        return ""
+    path = urllib.parse.urlsplit(raw.replace("\\", "/")).path
+    return urllib.parse.unquote(path)
+
+
+def attachment_filename_from_ref(ref: str, fallback: str = "attachment") -> str:
+    """Return the canonical attachment filename for a Markdown reference."""
+
+    return sanitize_attachment_filename(
+        os.path.basename(decode_local_attachment_path(ref)),
+        fallback=fallback,
+    )
 
 
 def _format_image_attrs(attrs: "dict[str, str]") -> str:
