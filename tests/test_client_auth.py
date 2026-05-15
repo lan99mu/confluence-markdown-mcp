@@ -54,3 +54,32 @@ def test_settings_is_cloud_false(monkeypatch):
     assert s.is_cloud is False
     client = ConfluenceClient.from_settings(s)
     assert client._api_prefix == "/rest/api"
+
+
+def test_pat_uses_bearer_auth_header():
+    client = ConfluenceClient(
+        base_url="https://wiki.example.com",
+        pat="pat-token",
+        is_cloud=False,
+    )
+    assert client._auth_header == "Bearer pat-token"
+
+
+def test_settings_accept_pat_without_email(monkeypatch):
+    monkeypatch.setenv("CONFLUENCE_BASE_URL", "https://wiki.example.com")
+    monkeypatch.delenv("CONFLUENCE_EMAIL", raising=False)
+    monkeypatch.delenv("CONFLUENCE_API_TOKEN", raising=False)
+    monkeypatch.setenv("CONFLUENCE_PAT", "pat-token")
+    settings = load_settings()
+    assert settings.pat == "pat-token"
+    client = ConfluenceClient.from_settings(settings)
+    assert client._auth_header == "Bearer pat-token"
+
+
+def test_pat_takes_precedence_over_basic_auth(monkeypatch):
+    monkeypatch.setenv("CONFLUENCE_BASE_URL", "https://example.atlassian.net")
+    monkeypatch.setenv("CONFLUENCE_EMAIL", "e@x.com")
+    monkeypatch.setenv("CONFLUENCE_API_TOKEN", "api-token")
+    monkeypatch.setenv("CONFLUENCE_PAT", "pat-token")
+    client = ConfluenceClient.from_settings(load_settings())
+    assert client._auth_header == "Bearer pat-token"

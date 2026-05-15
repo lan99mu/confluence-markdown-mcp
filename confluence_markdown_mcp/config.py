@@ -10,6 +10,7 @@ from typing import Optional
 ENV_BASE_URL = "CONFLUENCE_BASE_URL"
 ENV_EMAIL = "CONFLUENCE_EMAIL"
 ENV_API_TOKEN = "CONFLUENCE_API_TOKEN"
+ENV_PAT = "CONFLUENCE_PAT"
 ENV_TIMEOUT = "CONFLUENCE_TIMEOUT"
 ENV_DEFAULT_DIR = "CONFLUENCE_MARKDOWN_DIR"
 ENV_IS_CLOUD = "CONFLUENCE_IS_CLOUD"
@@ -42,22 +43,20 @@ class Settings:
     """
 
     base_url: str
-    email: str
-    api_token: str
+    email: Optional[str] = None
+    api_token: Optional[str] = None
+    pat: Optional[str] = None
     timeout: float = 30.0
     markdown_dir: Optional[str] = None
     is_cloud: bool = True
 
     def validate(self) -> None:
-        missing = [
-            name
-            for name, value in (
-                (ENV_BASE_URL, self.base_url),
-                (ENV_EMAIL, self.email),
-                (ENV_API_TOKEN, self.api_token),
-            )
-            if not value
-        ]
+        missing = [] if self.base_url else [ENV_BASE_URL]
+        if not self.pat:
+            if not self.email:
+                missing.append(ENV_EMAIL)
+            if not self.api_token:
+                missing.append(ENV_API_TOKEN)
         if missing:
             raise RuntimeError(
                 "Missing Confluence credentials. Please set the following "
@@ -77,6 +76,7 @@ def load_settings() -> Settings:
         base_url=os.getenv(ENV_BASE_URL, "").strip().rstrip("/"),
         email=os.getenv(ENV_EMAIL, "").strip(),
         api_token=os.getenv(ENV_API_TOKEN, "").strip(),
+        pat=os.getenv(ENV_PAT, "").strip(),
         timeout=timeout,
         markdown_dir=(os.getenv(ENV_DEFAULT_DIR, "").strip() or None),
         is_cloud=_parse_bool(os.getenv(ENV_IS_CLOUD), default=True),

@@ -33,13 +33,16 @@ The server reads credentials from environment variables. Confirm with the
 user that the following are set before the first call:
 
 - `CONFLUENCE_BASE_URL` – e.g. `https://<tenant>.atlassian.net`
-- `CONFLUENCE_EMAIL`    – Atlassian account email
-- `CONFLUENCE_API_TOKEN` – Atlassian API token
+- `CONFLUENCE_EMAIL` + `CONFLUENCE_API_TOKEN` – Atlassian account email and API token for Basic auth
+- `CONFLUENCE_PAT` – Personal Access Token for Bearer auth
 
 Optional:
 
 - `CONFLUENCE_TIMEOUT`        – HTTP timeout in seconds (default `30`)
 - `CONFLUENCE_MARKDOWN_DIR`   – default root for relative `output_dir`s
+
+Authentication is either/or: use email + API token for Basic auth, or set
+`CONFLUENCE_PAT` for Bearer auth. If both are present, the PAT is used.
 
 ## Tools provided
 
@@ -110,7 +113,7 @@ leak through a round-trip.
 
 - `RuntimeError: Missing Confluence credentials...` → remind the user to
   export the required environment variables.
-- `ConfluenceError: (401 Unauthorized)` → the API token is invalid/expired.
+- `ConfluenceError: (401 Unauthorized)` → the API token or PAT is invalid, expired, or lacks permission.
 - `ConfluenceError: (404 Not Found)` → double-check the `page_id`.
 - `FileNotFoundError` on `push_page` → verify the absolute file path.
 

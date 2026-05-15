@@ -69,11 +69,19 @@ python -m confluence_markdown_mcp --help
 | 变量 | 必填 | 说明 |
 | --- | --- | --- |
 | `CONFLUENCE_BASE_URL` | ✅ | Wiki 根 URL，例如 `https://<your-domain>.atlassian.net` |
-| `CONFLUENCE_EMAIL` | ✅ | 调用 API 的账号邮箱 |
-| `CONFLUENCE_API_TOKEN` | ✅ | [API token](https://id.atlassian.com/manage-profile/security/api-tokens) |
+| `CONFLUENCE_EMAIL` | 条件必填 | 基于 Basic Auth 登录时的账号邮箱 |
+| `CONFLUENCE_API_TOKEN` | 条件必填 | 基于 Basic Auth 登录时的 [API token](https://id.atlassian.com/manage-profile/security/api-tokens) |
+| `CONFLUENCE_PAT` | 条件必填 | Personal Access Token；设置后会走 `Authorization: Bearer <PAT>`，且优先于邮箱 + API token |
 | `CONFLUENCE_TIMEOUT` | ❎ | HTTP 超时秒数，默认 `30` |
 | `CONFLUENCE_MARKDOWN_DIR` | ❎ | `pull` 时相对路径所依赖的默认目录 |
 | `CONFLUENCE_IS_CLOUD` | ❎ | 是否为 Confluence Cloud；默认 `true`。设为 `false` 时走 Server/Data Center 的 `/rest/api`；Cloud 走 `/wiki/rest/api` |
+
+认证方式二选一：
+
+- **Basic Auth**：设置 `CONFLUENCE_EMAIL` + `CONFLUENCE_API_TOKEN`
+- **PAT**：设置 `CONFLUENCE_PAT`
+
+也就是说，只需要满足上述其中一种组合；并不是这三个认证变量都要同时设置。
 
 ### macOS / Linux（bash / zsh）
 
@@ -83,7 +91,14 @@ export CONFLUENCE_EMAIL="you@example.com"
 export CONFLUENCE_API_TOKEN="xxxxxxxxxxxx"
 ```
 
-如需永久生效，将以上三行追加到 `~/.bashrc`、`~/.zshrc` 或 `~/.profile` 中，然后执行 `source ~/.bashrc`（或对应文件）使其立即生效。
+如使用 PAT：
+
+```bash
+export CONFLUENCE_BASE_URL="https://wiki.example.com"
+export CONFLUENCE_PAT="xxxxxxxxxxxx"
+```
+
+如需永久生效，可将对应认证方式的命令追加到 `~/.bashrc`、`~/.zshrc` 或 `~/.profile` 中，再执行 `source ~/.bashrc`（或对应文件）使其立即生效。
 
 ### Windows（命令提示符 CMD）
 
@@ -264,6 +279,19 @@ mcpServers:
     "CONFLUENCE_BASE_URL": "https://example.atlassian.net",
     "CONFLUENCE_EMAIL": "you@example.com",
     "CONFLUENCE_API_TOKEN": "xxxxxxxxxxxx"
+  }
+}
+```
+
+PAT 配置示例：
+
+```json
+{
+  "command": "confluence-markdown-mcp",
+  "args": ["serve"],
+  "env": {
+    "CONFLUENCE_BASE_URL": "https://wiki.example.com",
+    "CONFLUENCE_PAT": "xxxxxxxxxxxx"
   }
 }
 ```
