@@ -37,8 +37,7 @@ Markdown 文件旁边的 `attachments/` 目录，`push_page` 会在更新页面�
 - `CONFLUENCE_TIMEOUT`        —— HTTP 超时（秒），默认 `30`
 - `CONFLUENCE_MARKDOWN_DIR`   —— 相对 `output_dir` 的默认根目录
 
-认证方式二选一：使用 `CONFLUENCE_EMAIL` + `CONFLUENCE_API_TOKEN`，
-或设置 `CONFLUENCE_PAT`。若两者同时存在，优先使用 PAT。
+认证方式二选一：使用 `CONFLUENCE_EMAIL` + `CONFLUENCE_API_TOKEN`，或设置 `CONFLUENCE_PAT`。若两者同时存在，优先使用 PAT。
 
 ## 提供的工具
 

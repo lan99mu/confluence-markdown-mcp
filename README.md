@@ -96,7 +96,7 @@ export CONFLUENCE_BASE_URL="https://wiki.example.com"
 export CONFLUENCE_PAT="xxxxxxxxxxxx"
 ```
 
-如需永久生效，将以上三行追加到 `~/.bashrc`、`~/.zshrc` 或 `~/.profile` 中，然后执行 `source ~/.bashrc`（或对应文件）使其立即生效。
+如需永久生效，将对应认证方式的以上命令追加到 `~/.bashrc`、`~/.zshrc` 或 `~/.profile` 中，然后执行 `source ~/.bashrc`（或对应文件）使其立即生效。
 
 ### Windows（命令提示符 CMD）
 
