@@ -56,6 +56,15 @@ Markdown 文件名由服务器根据页面标题自动生成（不安全字符�
 `page_id`（`pull_page` 会自动写入），则可以省略参数中的 `page_id`。`title`
 默认使用 front matter 中的标题，或页面当前的标题。
 
+附件上传规则：
+
+- 图片引用会自动上传，例如 `![image](attachments/example.png)`。
+- 普通文件链接只有在链接后紧跟 `<!--cm-attachment-->` 时才会作为附件上传，例如
+  `[file](attachments/example.eml) <!--cm-attachment-->`。
+- marker 必须写在链接**后面**；`<!--cm-attachment-->[file](...)` 不会被识别。
+- URL 编码的本地路径会在匹配文件和生成附件名之前先 decode，因此编码路径与本地
+  中文文件名、空格等场景会保持一致。
+
 ### `read_page(page_id: string)`
 
 `pull_page` 的便捷封装，**不会** 写入磁盘，直接返回 Markdown 正文和基础

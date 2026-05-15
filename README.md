@@ -154,6 +154,38 @@ confluence-markdown-mcp push --file ./docs/my-page.md --page-id 123456 --title "
 confluence-markdown-mcp serve
 ```
 
+### `push` 时的附件上传规则
+
+`push_page` / `confluence-markdown-mcp push` 不会仅因为文件位于 Markdown 同级的
+`attachments/` 目录中就自动上传所有普通附件。
+
+只有以下两类本地引用会在更新正文前创建 / 更新 Confluence 附件：
+
+1. 图片引用（自动上传）：
+   `![image](attachments/example.png)`
+2. 带 marker 的普通文件链接：
+   `[file](attachments/example.eml) <!--cm-attachment-->`
+
+注意：
+
+- `<!--cm-attachment-->` **必须写在链接后面**，写在前面不会被识别。
+- 未加 marker 的普通链接会按普通 `<a href="...">` 处理，不会自动上传为附件。
+- URL 编码路径会先 decode 再处理，因此
+  `attachments/%E5%BC%80%E6%94%BE%E6%97%A5%E9%82%80%E8%AF%B7%E4%BD%A0%E6%8A%95%E9%80%92%E7%AE%80%E5%8E%86.eml`
+  会与本地文件 `attachments/开放日邀请你投递简历.eml` 匹配，并使用同一个附件文件名。
+
+正确示例：
+
+```md
+[开放日邀请你投递简历.eml](attachments/开放日邀请你投递简历.eml) <!--cm-attachment-->
+```
+
+错误示例（marker 在前，不会被识别为附件上传）：
+
+```md
+<!--cm-attachment-->[开放日邀请你投递简历.eml](attachments/开放日邀请你投递简历.eml)
+```
+
 ## 作为 MCP 服务使用
 
 启动：`confluence-markdown-mcp serve`（stdio 传输）。服务提供以下工具：

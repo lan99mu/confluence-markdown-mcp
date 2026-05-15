@@ -54,6 +54,25 @@ def test_attachment_link_round_trip():
     assert "<![CDATA[Download the doc]]>" in back
 
 
+def test_unmarked_attachment_path_stays_plain_link():
+    md = "[Download the doc](attachments/doc.pdf)"
+    back = markdown_to_storage(md)
+    assert '<a href="attachments/doc.pdf">' in back
+    assert "<ri:attachment" not in back
+
+
+def test_attachment_link_with_urlencoded_filename_decodes_name():
+    md = (
+        "[垃圾邮件提醒](attachments/"
+        "%E5%9E%83%E5%9C%BE%E9%82%AE%E4%BB%B6%E6%8F%90%E9%86%922026%E5%B9%B45%E6%9C%886%E6%97%A5.eml)"
+        "<!--cm-attachment-->"
+    )
+    back = markdown_to_storage(md)
+    assert (
+        '<ri:attachment ri:filename="垃圾邮件提醒2026年5月6日.eml"' in back
+    )
+
+
 def test_orphan_image_comment_is_dropped():
     # If the user removes an image but leaves the marker behind, we must
     # not emit an unsafe HTML comment back to Confluence.
@@ -80,3 +99,12 @@ def test_image_src_with_attachments_subdir_strips_directory():
     back = markdown_to_storage(md)
     assert 'ri:filename="cat.png"' in back
     assert "attachments/" not in back
+
+
+def test_image_src_with_urlencoded_filename_decodes_name():
+    md = (
+        "![cat](attachments/"
+        "%E5%BC%80%E6%94%BE%E6%97%A5%E9%82%80%E8%AF%B7%E4%BD%A0%E6%8A%95%E9%80%92%E7%AE%80%E5%8E%86.eml)"
+    )
+    back = markdown_to_storage(md)
+    assert 'ri:filename="开放日邀请你投递简历.eml"' in back

@@ -232,6 +232,77 @@ def test_push_updates_changed_attachment():
         assert client.uploads[0]["action"] == "update"
 
 
+def test_push_uploads_marked_file_link_attachment():
+    client = FakeClient({"id": "42", "title": "t", "version": {"number": 3}})
+    service = ConfluenceService(client=client, settings=None)
+
+    with tempfile.TemporaryDirectory() as d:
+        att_dir = os.path.join(d, "attachments")
+        os.makedirs(att_dir)
+        with open(os.path.join(att_dir, "doc.eml"), "wb") as fh:
+            fh.write(b"mail")
+        md_path = os.path.join(d, "page.md")
+        with open(md_path, "w", encoding="utf-8") as fh:
+            fh.write("---\npage_id: \"42\"\n---\n\n")
+            fh.write("[doc](attachments/doc.eml) <!--cm-attachment-->\n")
+
+        result = service.push_page(file_path=md_path)
+        assert result.attachments[0].filename == "doc.eml"
+        assert result.attachments[0].action == "created"
+        assert client.uploads[0]["action"] == "create"
+        assert '<ri:attachment ri:filename="doc.eml"' in client.update_calls[0]["storage"]
+
+
+def test_push_keeps_unmarked_file_link_as_plain_link():
+    client = FakeClient({"id": "42", "title": "t", "version": {"number": 3}})
+    service = ConfluenceService(client=client, settings=None)
+
+    with tempfile.TemporaryDirectory() as d:
+        att_dir = os.path.join(d, "attachments")
+        os.makedirs(att_dir)
+        with open(os.path.join(att_dir, "doc.eml"), "wb") as fh:
+            fh.write(b"mail")
+        md_path = os.path.join(d, "page.md")
+        with open(md_path, "w", encoding="utf-8") as fh:
+            fh.write("---\npage_id: \"42\"\n---\n\n")
+            fh.write("[doc](attachments/doc.eml)\n")
+
+        result = service.push_page(file_path=md_path)
+        assert result.attachments == []
+        assert client.uploads == []
+        assert '<a href="attachments/doc.eml">' in client.update_calls[0]["storage"]
+        assert "<ri:attachment" not in client.update_calls[0]["storage"]
+
+
+def test_push_uploads_urlencoded_file_link_using_decoded_filename():
+    client = FakeClient({"id": "42", "title": "t", "version": {"number": 3}})
+    service = ConfluenceService(client=client, settings=None)
+
+    with tempfile.TemporaryDirectory() as d:
+        filename = "垃圾邮件提醒2026年5月6日.eml"
+        att_dir = os.path.join(d, "attachments")
+        os.makedirs(att_dir)
+        with open(os.path.join(att_dir, filename), "wb") as fh:
+            fh.write(b"mail")
+        md_path = os.path.join(d, "page.md")
+        with open(md_path, "w", encoding="utf-8") as fh:
+            fh.write("---\npage_id: \"42\"\n---\n\n")
+            fh.write(
+                "[mail](attachments/"
+                "%E5%9E%83%E5%9C%BE%E9%82%AE%E4%BB%B6%E6%8F%90%E9%86%922026%E5%B9%B45%E6%9C%886%E6%97%A5.eml)"
+                " <!--cm-attachment-->\n"
+            )
+
+        result = service.push_page(file_path=md_path)
+        assert result.attachments[0].filename == filename
+        assert result.attachments[0].path == os.path.join(att_dir, filename)
+        assert client.uploads[0]["file"] == os.path.join(att_dir, filename)
+        assert (
+            f'<ri:attachment ri:filename="{filename}"'
+            in client.update_calls[0]["storage"]
+        )
+
+
 def test_push_rejects_path_traversal_outside_markdown_dir():
     client = FakeClient({"id": "42", "title": "t", "version": {"number": 3}})
     service = ConfluenceService(client=client, settings=None)

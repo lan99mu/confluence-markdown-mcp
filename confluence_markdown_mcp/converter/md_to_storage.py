@@ -29,12 +29,11 @@ from ._plantuml import plantuml_iframe
 from ._style import SAFE_ALIGN_VALUES, build_span_style, extract_align
 from .macros import (
     ADMONITIONS,
-    ATTACHMENTS_DIRNAME,
     ATTACHMENT_LINK_MARKER_RE,
     IMAGE_ATTR_COMMENT_RE,
     UNKNOWN_MACRO_RE,
+    attachment_filename_from_ref,
     parse_image_attr_comment,
-    sanitize_attachment_filename,
 )
 
 
@@ -536,12 +535,11 @@ def _render_inline(children: List[Token]) -> str:
             buf.append("</s>")
         elif ty == "link_open":
             href = dict(t.attrs or {}).get("href", "")
-            # Attachment-backed link when the pull side marked it, or when
-            # the href is a relative path that lives under the attachments
-            # directory (``attachments/foo.pdf``).  The close token is
-            # consumed by the helper so we don't emit an ``</a>`` later.
+            # Attachment-backed links require an explicit trailing
+            # ``<!--cm-attachment-->`` marker. The close token is consumed by
+            # the helper so we don't emit an ``</a>`` later.
             marker_index = _find_attachment_marker(children, i)
-            is_attachment = marker_index is not None or _is_local_attachment_path(href)
+            is_attachment = marker_index is not None
             if is_attachment:
                 consumed = _emit_attachment_link(buf, children, i, href, marker_index)
                 i = consumed
@@ -620,20 +618,6 @@ def _is_external_url(src: str) -> bool:
     """Return True when ``src`` looks like an http(s)/data/mailto URL etc."""
 
     return bool(src and _EXTERNAL_URL_RE.match(src))
-
-
-def _is_local_attachment_path(href: str) -> bool:
-    """Heuristic for links that point at a file stored as an attachment.
-
-    We only treat relative paths living under ``attachments/`` as
-    attachments; other relative paths may be wiki page references so we
-    leave them as ordinary ``<a href>`` to avoid false positives.
-    """
-
-    if not href or _is_external_url(href):
-        return False
-    normalized = href.replace("\\", "/").lstrip("./")
-    return normalized.startswith(ATTACHMENTS_DIRNAME + "/")
 
 
 def _consume_image_attr_comment(
@@ -724,7 +708,7 @@ def _emit_attachment_link(
         j += 1
 
     label = "".join(label_parts).strip()
-    filename = sanitize_attachment_filename(os.path.basename(href.replace("\\", "/")))
+    filename = attachment_filename_from_ref(href)
     safe_label = (label or filename).replace("]]>", "]]]]><![CDATA[>")
     buf.append(
         f'<ac:link><ri:attachment ri:filename="{html.escape(filename, quote=True)}" />'
@@ -767,8 +751,7 @@ def _render_image(src: str, alt: str, extra: Dict[str, str]) -> str:
             "</ac:image>"
         )
 
-    basename = os.path.basename(src.replace("\\", "/")) if src else ""
-    filename = sanitize_attachment_filename(basename) if basename else ""
+    filename = attachment_filename_from_ref(src, fallback="")
     if not filename:
         # No resolvable target – fall back to an empty image so we don't
         # crash; the user can fix the source in the editor.
