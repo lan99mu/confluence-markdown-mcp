@@ -51,7 +51,7 @@ class Settings:
     is_cloud: bool = True
 
     def validate(self) -> None:
-        missing = [name for name, value in ((ENV_BASE_URL, self.base_url),) if not value]
+        missing = [] if self.base_url else [ENV_BASE_URL]
         if not self.pat:
             if not self.email:
                 missing.append(ENV_EMAIL)
