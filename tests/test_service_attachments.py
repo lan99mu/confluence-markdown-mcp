@@ -279,7 +279,7 @@ def test_push_uploads_urlencoded_file_link_using_decoded_filename():
     service = ConfluenceService(client=client, settings=None)
 
     with tempfile.TemporaryDirectory() as d:
-        filename = "垃圾邮件提醒2026年5月6日.eml"
+        filename = "附件示例.eml"
         att_dir = os.path.join(d, "attachments")
         os.makedirs(att_dir)
         with open(os.path.join(att_dir, filename), "wb") as fh:
@@ -289,7 +289,7 @@ def test_push_uploads_urlencoded_file_link_using_decoded_filename():
             fh.write("---\npage_id: \"42\"\n---\n\n")
             fh.write(
                 "[mail](attachments/"
-                "%E5%9E%83%E5%9C%BE%E9%82%AE%E4%BB%B6%E6%8F%90%E9%86%922026%E5%B9%B45%E6%9C%886%E6%97%A5.eml)"
+                "%E9%99%84%E4%BB%B6%E7%A4%BA%E4%BE%8B.eml)"
                 " <!--cm-attachment-->\n"
             )
 

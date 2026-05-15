@@ -63,13 +63,13 @@ def test_unmarked_attachment_path_stays_plain_link():
 
 def test_attachment_link_with_urlencoded_filename_decodes_name():
     md = (
-        "[垃圾邮件提醒](attachments/"
-        "%E5%9E%83%E5%9C%BE%E9%82%AE%E4%BB%B6%E6%8F%90%E9%86%922026%E5%B9%B45%E6%9C%886%E6%97%A5.eml)"
+        "[附件](attachments/"
+        "%E9%99%84%E4%BB%B6%E7%A4%BA%E4%BE%8B.eml)"
         "<!--cm-attachment-->"
     )
     back = markdown_to_storage(md)
     assert (
-        '<ri:attachment ri:filename="垃圾邮件提醒2026年5月6日.eml"' in back
+        '<ri:attachment ri:filename="附件示例.eml"' in back
     )
 
 
