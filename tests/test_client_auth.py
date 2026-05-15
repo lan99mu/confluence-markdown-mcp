@@ -11,7 +11,7 @@ from confluence_markdown_mcp.config import load_settings
 def _make_client(is_cloud: bool) -> ConfluenceClient:
     return ConfluenceClient(
         base_url="https://example.atlassian.net",
-        email="e@x.com",
+        email="user@example.com",
         api_token="tok",
         is_cloud=is_cloud,
     )
@@ -39,7 +39,7 @@ def test_server_uses_rest_prefix():
 
 def test_settings_is_cloud_default_true(monkeypatch):
     monkeypatch.setenv("CONFLUENCE_BASE_URL", "https://example.atlassian.net")
-    monkeypatch.setenv("CONFLUENCE_EMAIL", "e@x.com")
+    monkeypatch.setenv("CONFLUENCE_EMAIL", "user@example.com")
     monkeypatch.setenv("CONFLUENCE_API_TOKEN", "tok")
     monkeypatch.delenv("CONFLUENCE_IS_CLOUD", raising=False)
     assert load_settings().is_cloud is True
@@ -47,7 +47,7 @@ def test_settings_is_cloud_default_true(monkeypatch):
 
 def test_settings_is_cloud_false(monkeypatch):
     monkeypatch.setenv("CONFLUENCE_BASE_URL", "https://wiki.example.com")
-    monkeypatch.setenv("CONFLUENCE_EMAIL", "e@x.com")
+    monkeypatch.setenv("CONFLUENCE_EMAIL", "user@example.com")
     monkeypatch.setenv("CONFLUENCE_API_TOKEN", "tok")
     monkeypatch.setenv("CONFLUENCE_IS_CLOUD", "false")
     s = load_settings()
@@ -78,7 +78,7 @@ def test_settings_accept_pat_without_email(monkeypatch):
 
 def test_pat_takes_precedence_over_basic_auth(monkeypatch):
     monkeypatch.setenv("CONFLUENCE_BASE_URL", "https://example.atlassian.net")
-    monkeypatch.setenv("CONFLUENCE_EMAIL", "e@x.com")
+    monkeypatch.setenv("CONFLUENCE_EMAIL", "user@example.com")
     monkeypatch.setenv("CONFLUENCE_API_TOKEN", "api-token")
     monkeypatch.setenv("CONFLUENCE_PAT", "pat-token")
     client = ConfluenceClient.from_settings(load_settings())
