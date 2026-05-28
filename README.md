@@ -64,6 +64,20 @@ pip install -r requirements.txt
 python -m confluence_markdown_mcp --help
 ```
 
+## 打包产物（Windows / macOS）
+
+仓库已提供 GitHub Actions 工作流：`.github/workflows/build-packages.yml`。
+
+- 支持平台：`windows-latest`、`macos-latest`
+- 触发方式：
+  - 手动触发（`workflow_dispatch`）
+  - 推送版本标签（`v*`）时自动触发
+- 产物形式：
+  - Windows：`confluence-markdown-mcp-windows-x64.zip`（内含 `confluence-markdown-mcp.exe`）
+  - macOS：`confluence-markdown-mcp-macos.tar.gz`（内含 `confluence-markdown-mcp`）
+
+产物会上传到对应 workflow run 的 Artifacts，可直接下载使用。
+
 ## 配置（环境变量）
 
 | 变量 | 必填 | 说明 |

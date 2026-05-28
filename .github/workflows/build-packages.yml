@@ -1,0 +1,65 @@
+name: Build Packages
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: windows-x64
+            binary_name: confluence-markdown-mcp.exe
+            archive_ext: zip
+          - os: macos-latest
+            artifact_name: macos
+            binary_name: confluence-markdown-mcp
+            archive_ext: tar.gz
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+          pip install pyinstaller
+
+      - name: Build executable
+        run: |
+          pyinstaller --onefile --name confluence-markdown-mcp confluence_markdown_mcp/__main__.py
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path artifacts -Force | Out-Null
+          Compress-Archive -Path "dist/${{ matrix.binary_name }}" -DestinationPath "artifacts/confluence-markdown-mcp-${{ matrix.artifact_name }}.${{ matrix.archive_ext }}" -Force
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p artifacts
+          tar -czf "artifacts/confluence-markdown-mcp-${{ matrix.artifact_name }}.${{ matrix.archive_ext }}" -C dist "${{ matrix.binary_name }}"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: confluence-markdown-mcp-${{ matrix.artifact_name }}
+          path: artifacts/confluence-markdown-mcp-${{ matrix.artifact_name }}.${{ matrix.archive_ext }}
