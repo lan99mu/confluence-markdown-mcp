@@ -28,7 +28,17 @@ except ImportError as exc:  # pragma: no cover
 from .service import ConfluenceService, page_summary
 
 
-def create_server(service: Optional[ConfluenceService] = None) -> FastMCP:
+def create_server(
+    service: Optional[ConfluenceService] = None,
+    *,
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    mount_path: str = "/",
+    sse_path: str = "/sse",
+    streamable_http_path: str = "/mcp",
+    json_response: bool = False,
+    stateless_http: bool = False,
+) -> FastMCP:
     """Build and return a configured :class:`FastMCP` instance.
 
     The service is created lazily on the first tool invocation so that the
@@ -45,6 +55,13 @@ def create_server(service: Optional[ConfluenceService] = None) -> FastMCP:
             "CONFLUENCE_EMAIL and CONFLUENCE_API_TOKEN, or CONFLUENCE_PAT, "
             "in the environment."
         ),
+        host=host,
+        port=port,
+        mount_path=mount_path,
+        sse_path=sse_path,
+        streamable_http_path=streamable_http_path,
+        json_response=json_response,
+        stateless_http=stateless_http,
     )
 
     _state: Dict[str, Any] = {"service": service}
@@ -141,8 +158,51 @@ def create_server(service: Optional[ConfluenceService] = None) -> FastMCP:
     return app
 
 
-def run() -> None:
-    """Entry point used by the ``confluence-markdown-mcp serve`` command."""
+def run(
+    transport: str = "stdio",
+    *,
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    mount_path: str = "/",
+    sse_path: str = "/sse",
+    streamable_http_path: str = "/mcp",
+    json_response: bool = False,
+    stateless_http: bool = False,
+) -> None:
+    """Entry point used by the ``confluence-markdown-mcp serve`` command.
 
-    server = create_server()
-    server.run()  # stdio transport by default
+    Parameters
+    ----------
+    transport:
+        MCP transport to use. One of ``stdio`` (default), ``sse`` or
+        ``streamable-http``. The two HTTP transports expose the server over
+        a real network socket so that the same MCP can be reused by remote
+        clients or run inside a container.
+    host / port:
+        Bind address for the HTTP transports. Ignored when ``transport`` is
+        ``stdio``. Default ``127.0.0.1:8000``; bind to ``0.0.0.0`` when
+        running inside a container.
+    mount_path / sse_path / streamable_http_path:
+        URL paths the corresponding HTTP transport is mounted on.
+    json_response / stateless_http:
+        Forwarded to ``FastMCP``. ``stateless_http=True`` is convenient for
+        load-balanced container deployments where each request may hit a
+        different replica.
+    """
+
+    if transport not in {"stdio", "sse", "streamable-http"}:
+        raise ValueError(
+            "Unsupported transport: "
+            f"{transport!r}. Expected one of 'stdio', 'sse', 'streamable-http'."
+        )
+
+    server = create_server(
+        host=host,
+        port=port,
+        mount_path=mount_path,
+        sse_path=sse_path,
+        streamable_http_path=streamable_http_path,
+        json_response=json_response,
+        stateless_http=stateless_http,
+    )
+    server.run(transport=transport)

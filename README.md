@@ -165,9 +165,66 @@ confluence-markdown-mcp pull --page-id 123456 -o ./docs/
 confluence-markdown-mcp push --file ./docs/my-page.md
 confluence-markdown-mcp push --file ./docs/my-page.md --page-id 123456 --title "新标题"
 
-# 启动 MCP stdio 服务
+# 启动 MCP stdio 服务（默认）
 confluence-markdown-mcp serve
+
+# 启动 MCP HTTP 服务（streamable-http，监听 0.0.0.0:8000/mcp）
+confluence-markdown-mcp serve --transport streamable-http --host 0.0.0.0 --port 8000
+
+# 启动 MCP SSE 服务（监听 0.0.0.0:8000/sse）
+confluence-markdown-mcp serve --transport sse --host 0.0.0.0 --port 8000
 ```
+
+### HTTP 传输与容器化
+
+`serve` 子命令支持三种 MCP 传输协议：
+
+| `--transport` | 说明 | 默认地址 |
+| --- | --- | --- |
+| `stdio` | 标准输入输出，适合 Claude Desktop 等本地客户端（默认） | — |
+| `sse` | Server-Sent Events，HTTP 长连接 | `http://127.0.0.1:8000/sse` |
+| `streamable-http` | 推荐的远程传输，单个 HTTP 端点同时承载请求与流式响应 | `http://127.0.0.1:8000/mcp` |
+
+常用参数：
+
+- `--host` / `--port`：HTTP 监听地址与端口（容器内通常使用 `--host 0.0.0.0`）。
+- `--mount-path`：HTTP 应用挂载前缀，默认 `/`。
+- `--sse-path` / `--streamable-http-path`：对应传输的 URL 路径。
+- `--json-response`：streamable-http 以 JSON 响应代替 SSE 流。
+- `--stateless-http`：streamable-http 无状态模式，便于多副本 / 负载均衡部署。
+
+#### 使用 Docker 运行
+
+仓库提供了 `Dockerfile`，默认以 `streamable-http` 传输监听 `0.0.0.0:8000/mcp`。
+
+```bash
+# 构建镜像
+docker build -t confluence-markdown-mcp .
+
+# 以 streamable-http 模式启动（默认 CMD）
+docker run --rm -p 8000:8000 \
+  -e CONFLUENCE_BASE_URL="https://example.atlassian.net" \
+  -e CONFLUENCE_EMAIL="you@example.com" \
+  -e CONFLUENCE_API_TOKEN="xxxxxxxxxxxx" \
+  confluence-markdown-mcp
+
+# 自定义参数（例如改成 SSE 传输）
+docker run --rm -p 8000:8000 \
+  -e CONFLUENCE_BASE_URL="https://example.atlassian.net" \
+  -e CONFLUENCE_PAT="xxxxxxxxxxxx" \
+  confluence-markdown-mcp \
+  serve --transport sse --host 0.0.0.0 --port 8000
+
+# 挂载本地目录供 pull/push 子命令读写 Markdown
+docker run --rm -it -v "$PWD/docs:/data" \
+  -e CONFLUENCE_BASE_URL="https://example.atlassian.net" \
+  -e CONFLUENCE_PAT="xxxxxxxxxxxx" \
+  confluence-markdown-mcp \
+  pull --page-id 123456 -o /data/
+```
+
+客户端通过 HTTP 连接 MCP 时，请将 endpoint 指向 `http://<host>:<port>/mcp`
+（streamable-http）或 `http://<host>:<port>/sse`（SSE）。
 
 ### `push` 时的附件上传规则
 
