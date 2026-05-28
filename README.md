@@ -260,15 +260,26 @@ docker run --rm -it -v "$PWD/docs:/data" \
 
 ## 作为 MCP 服务使用
 
-启动：`confluence-markdown-mcp serve`（stdio 传输）。服务提供以下工具：
+启动：`confluence-markdown-mcp serve`（stdio 传输，HTTP/容器模式见上文）。
 
-| 工具 | 参数 | 说明 |
+为了让远程 / 容器化部署也安全好用，并且**避免把整篇页面正文直接喂进大模型上下文**，MCP 工具以"文件流"（MCP `EmbeddedResource` 二进制 blob，base64 编码）作为 IO 单位：
+
+| 工具 | 入参 | 返回 |
 | --- | --- | --- |
-| `pull_page` | `page_id`, `output_dir?` | 拉取为 Markdown；`output_dir` 仅指定目录（文件名由服务端按页面标题自动生成），不传则直接返回内容 |
-| `push_page` | `file_path`, `page_id?`, `title?` | 上传本地 `.md` 到 wiki |
-| `read_page` | `page_id` | 仅返回 Markdown（不落盘） |
+| `pull_page` | `page_id`, `download_attachments?`（默认 true） | 一个 `text` 元数据块（JSON：`page_id` / `title` / `space_key` / `version` / `markdown_resource_uri` / `markdown_bytes` / `attachments[]`）+ 一个 `text/markdown` 的 `EmbeddedResource` blob 作为正文 + 每个附件各一个 `EmbeddedResource` blob |
+| `push_page` | `markdown_base64`（必填，由调用方读取本地文件并 base64 编码）；可选 `page_id` / `title` / `upload_attachments` / `attachments=[{filename, content_base64}, ...]` | JSON：`page_id` / `title` / `version` / `attachments[]` |
+| `read_page` | `page_id` | 与 `pull_page` 相同的返回结构，但永远不下载附件 |
 
-资源：`confluence://page/{page_id}` — 只读 Markdown 视图。
+资源：`confluence://page/{page_id}` — 只读 Markdown 视图，由 host 显式拉取。
+
+要点：
+
+- **服务端不读写调用方的本地文件系统**：`pull_page` 不再接受 `output_dir`，`push_page` 不再接受 `file_path`。所有文件 IO 都由 MCP host（Claude Desktop / Cursor 等）在客户端侧完成——这是 MCP host 原生职责。
+- **正文不进入模型上下文**：`pull_page` 返回的 metadata 文本块**只包含元数据，不包含 Markdown 内容**；正文以 `EmbeddedResource` 形式承载，MCP host 通常将其作为可下载文件呈现，模型默认不会读取。如果模型确实需要正文，host 可显式把 blob 作为上下文喂入。
+- **多副本 / 多租户安全**：`push_page` 的 `attachments` 文件名会做路径越权检查（拒绝 `..`、`/`、`\` 等）。Markdown 与附件落到服务端的临时目录，每次调用结束立刻删除。
+- **本地 CLI 不受影响**：`confluence-markdown-mcp pull/push` 命令行仍然按本地文件路径工作，便于脚本和 CI 使用。
+
+> 旧版本中 `pull_page` 的 `output_dir`、`push_page` 的 `file_path` 入参已移除——它们在 HTTP / 容器部署下本来就是断的（指向的是容器内路径而不是调用方的机器）。如需让容器持续读写一份本地 Markdown 仓库，请改用 CLI 子命令并通过 `docker run -v` 挂载工作目录。
 
 ### Claude Desktop
 
