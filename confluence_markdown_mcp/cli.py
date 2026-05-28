@@ -129,6 +129,35 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_serve.set_defaults(func=_cmd_serve)
 
+    p_serve_http = sub.add_parser(
+        "serve-http",
+        help=(
+            "Start a plain FastAPI HTTP server (no MCP). Suitable for "
+            "remote / cloud deployments and clients that prefer "
+            "multipart/form-data uploads to MCP tool calls."
+        ),
+    )
+    p_serve_http.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help=(
+            "Bind address (default 127.0.0.1). Use 0.0.0.0 when running "
+            "inside a container."
+        ),
+    )
+    p_serve_http.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="TCP port (default 8000).",
+    )
+    p_serve_http.add_argument(
+        "--log-level",
+        default="info",
+        help="uvicorn log level (default 'info').",
+    )
+    p_serve_http.set_defaults(func=_cmd_serve_http)
+
     return parser
 
 
@@ -192,6 +221,15 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         json_response=args.json_response,
         stateless_http=args.stateless_http,
     )
+    return 0
+
+
+def _cmd_serve_http(args: argparse.Namespace) -> int:
+    # Imported lazily so that the ``pull`` / ``push`` / ``serve`` commands
+    # work even if the optional ``fastapi`` / ``uvicorn`` deps are missing.
+    from .http_api import run as run_http
+
+    run_http(host=args.host, port=args.port, log_level=args.log_level)
     return 0
 
 

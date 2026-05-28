@@ -258,6 +258,69 @@ docker run --rm -it -v "$PWD/docs:/data" \
 <!--cm-attachment-->[附件示例.eml](attachments/附件示例.eml)
 ```
 
+## 作为普通 HTTP 服务使用（FastAPI / `multipart/form-data`）
+
+除了 MCP 之外，本项目还提供一个**纯 HTTP API**（FastAPI 实现），便于在
+云端、容器或非 MCP 客户端（脚本、CI、前端、`curl`）中直接通过
+`multipart/form-data` 上传 Markdown + 附件，无需 base64、也无需 MCP host
+做参数富化。
+
+安装可选依赖并启动：
+
+```bash
+pip install ".[http]"
+confluence-markdown-mcp serve-http --host 0.0.0.0 --port 8000
+```
+
+启动后会在 `http://<host>:<port>` 暴露以下接口：
+
+| 方法 + 路径 | 说明 |
+| --- | --- |
+| `GET /healthz` | 健康检查 |
+| `GET /pages/{page_id}` | 返回页面元数据 + 完整 Markdown 正文 + 附件清单（JSON）。`?download_attachments=false` 可跳过附件下载。 |
+| `GET /pages/{page_id}/markdown` | 直接以 `text/markdown` 返回正文。 |
+| `GET /pages/{page_id}/attachments/{filename}` | 流式下载单个附件二进制。 |
+| `POST /pages/{page_id}` | `multipart/form-data` 上传：必填 `md_file=@xxx.md`；可选重复 `attachments=@xxx`；可选表单字段 `title`、`upload_attachments`（`true`/`false`，默认 `true`）。 |
+
+`curl` 示例：
+
+```bash
+# 拉取整页（含 Markdown 正文与附件清单）
+curl http://localhost:8000/pages/123456
+
+# 只要 Markdown 正文
+curl http://localhost:8000/pages/123456/markdown -o page.md
+
+# 下载某个附件
+curl http://localhost:8000/pages/123456/attachments/diagram.png -o diagram.png
+
+# 用 multipart 直传 Markdown + 附件回写页面
+curl -X POST http://localhost:8000/pages/123456 \
+  -F "title=我的文档" \
+  -F "upload_attachments=true" \
+  -F "md_file=@doc.md;type=text/markdown" \
+  -F "attachments=@attachments/diagram.png" \
+  -F "attachments=@attachments/notes.eml"
+```
+
+注意：
+
+- `attachments` 字段会被写入服务端临时目录的 `attachments/` 下，再交给现有
+  `push_page` 逻辑处理；只有**真正被 Markdown 引用**（图片或带
+  `<!--cm-attachment-->` marker 的链接）的文件才会真正上传到 Confluence。
+- 文件名做了路径穿越校验（拒绝 `..`、`/`、`\` 等），并复用 MCP 层一致的
+  `sanitize_attachment_filename`。
+- 临时目录在每次请求结束后立刻删除，服务端不会持久保留调用方的字节。
+- 该 HTTP 服务与 MCP 服务共用同一个 `ConfluenceService`，业务逻辑、附件
+  处理规则、错误语义完全一致；只是传输层从 MCP/JSON-RPC 换成了纯 HTTP。
+
+什么时候选哪个？
+
+- **MCP（`serve`）**：用于 Claude Desktop / Cursor / Cline 等 MCP 客户端，
+  本地 stdio 部署最自然，LLM 直接把它当 tool 调用。
+- **HTTP（`serve-http`）**：用于云端 / 容器化部署、脚本、CI、前端，或想用
+  `curl -F` 直接传文件流的场景；不依赖任何 MCP host。
+
 ## 作为 MCP 服务使用
 
 启动：`confluence-markdown-mcp serve`（stdio 传输，HTTP/容器模式见上文）。
