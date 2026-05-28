@@ -75,8 +75,9 @@ python -m confluence_markdown_mcp --help
 - 产物形式：
   - Windows：`confluence-markdown-mcp-windows-x64.zip`（内含 `confluence-markdown-mcp.exe`）
   - macOS：`confluence-markdown-mcp-macos.tar.gz`（内含 `confluence-markdown-mcp`）
-
-产物会上传到对应 workflow run 的 Artifacts，可直接下载使用。
+- 上传位置：
+  - 所有构建都会上传到 workflow run 的 Artifacts
+  - 当推送 `v*` 标签时，会自动创建/更新同名 GitHub Release 并附加上述打包文件
 
 ## 配置（环境变量）
 

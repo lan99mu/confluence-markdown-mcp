@@ -7,7 +7,7 @@ on:
       - "v*"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -63,3 +63,25 @@ jobs:
         with:
           name: confluence-markdown-mcp-${{ matrix.artifact_name }}
           path: artifacts/confluence-markdown-mcp-${{ matrix.artifact_name }}.${{ matrix.archive_ext }}
+
+  release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download all package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: confluence-markdown-mcp-*
+          merge-multiple: true
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: artifacts/*
+          overwrite_files: true
