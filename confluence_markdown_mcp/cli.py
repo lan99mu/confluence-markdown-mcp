@@ -69,63 +69,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_serve = sub.add_parser(
         "serve",
-        help="Start the MCP server (stdio / SSE / streamable-http transport)",
-    )
-    p_serve.add_argument(
-        "--transport",
-        choices=("stdio", "sse", "streamable-http"),
-        default="stdio",
-        help=(
-            "MCP transport. 'stdio' (default) is suitable for local "
-            "desktop clients such as Claude Desktop. 'sse' and "
-            "'streamable-http' expose the server over HTTP so that it can "
-            "be reused by remote clients or run inside a container."
-        ),
-    )
-    p_serve.add_argument(
-        "--host",
-        default="127.0.0.1",
-        help=(
-            "Bind address for HTTP transports (default 127.0.0.1). Use "
-            "0.0.0.0 when running inside a container."
-        ),
-    )
-    p_serve.add_argument(
-        "--port",
-        type=int,
-        default=8000,
-        help="TCP port for HTTP transports (default 8000).",
-    )
-    p_serve.add_argument(
-        "--mount-path",
-        default="/",
-        help="URL prefix the MCP app is mounted on (default '/').",
-    )
-    p_serve.add_argument(
-        "--sse-path",
-        default="/sse",
-        help="URL path for the SSE transport (default '/sse').",
-    )
-    p_serve.add_argument(
-        "--streamable-http-path",
-        default="/mcp",
-        help="URL path for the streamable-http transport (default '/mcp').",
-    )
-    p_serve.add_argument(
-        "--json-response",
-        action="store_true",
-        help=(
-            "For streamable-http, return responses as JSON instead of "
-            "Server-Sent Events."
-        ),
-    )
-    p_serve.add_argument(
-        "--stateless-http",
-        action="store_true",
-        help=(
-            "Run the streamable-http transport in stateless mode. Useful "
-            "for load-balanced container deployments."
-        ),
+        help="Start the MCP stdio server",
     )
     p_serve.set_defaults(func=_cmd_serve)
 
@@ -211,16 +155,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     # the optional ``mcp`` dependency is missing.
     from .server import run as run_server
 
-    run_server(
-        transport=args.transport,
-        host=args.host,
-        port=args.port,
-        mount_path=args.mount_path,
-        sse_path=args.sse_path,
-        streamable_http_path=args.streamable_http_path,
-        json_response=args.json_response,
-        stateless_http=args.stateless_http,
-    )
+    run_server()
     return 0
 
 

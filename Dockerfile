@@ -23,8 +23,7 @@ WORKDIR /data
 
 EXPOSE 8000
 
-# Default to the streamable-http transport bound to all interfaces so the
-# container is reachable from the host. Override CMD/args to use SSE or a
-# different bind address / port.
+# Default to the plain HTTP API bound to all interfaces so the container is
+# reachable from the host. MCP itself is stdio-only.
 ENTRYPOINT ["confluence-markdown-mcp"]
-CMD ["serve", "--transport", "streamable-http", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["serve-http", "--host", "0.0.0.0", "--port", "8000"]
