@@ -302,9 +302,9 @@ curl -X POST http://localhost:8000/pages/123456 \
 
 ## 作为 MCP 服务使用
 
-启动：`confluence-markdown-mcp serve`（stdio 传输，HTTP/容器模式见上文）。
+启动：`confluence-markdown-mcp serve`（stdio 传输，通常由本地 MCP host 拉起；如需 HTTP / 容器化访问请见上文 `serve-http`）。
 
-为了让远程 / 容器化部署也安全好用，并且**避免把整篇页面正文直接喂进大模型上下文**，MCP 工具以"文件流"（MCP `EmbeddedResource` 二进制 blob，base64 编码）作为 IO 单位：
+MCP 这一路径仍然是**本地 stdio 用法**。这里把 Markdown / 附件设计成"文件流"（MCP `EmbeddedResource` 二进制 blob，base64 编码）作为 IO 单位，主要是为了**避免把整篇页面正文直接喂进大模型上下文**；MCP host 如有需要，仍可在本地自行保存这些 blob：
 
 | 工具 | 入参 | 返回 |
 | --- | --- | --- |
@@ -316,12 +316,12 @@ curl -X POST http://localhost:8000/pages/123456 \
 
 要点：
 
-- **服务端不读写调用方的本地文件系统**：`pull_page` 不再接受 `output_dir`，`push_page` 不再接受 `file_path`。所有文件 IO 都由 MCP host（Claude Desktop / Cursor 等）在客户端侧完成——这是 MCP host 原生职责。
+- **MCP 工具不再直接接收本地路径参数**：`pull_page` 不再接受 `output_dir`，`push_page` 不再接受 `file_path`。是否落盘、落到哪里，由 MCP host（Claude Desktop / Cursor 等）在本机侧决定。
 - **正文不进入模型上下文**：`pull_page` 返回的 metadata 文本块**只包含元数据，不包含 Markdown 内容**；正文以 `EmbeddedResource` 形式承载，MCP host 通常将其作为可下载文件呈现，模型默认不会读取。如果模型确实需要正文，host 可显式把 blob 作为上下文喂入。
 - **多副本 / 多租户安全**：`push_page` 的 `attachments` 文件名会做路径越权检查（拒绝 `..`、`/`、`\` 等）。Markdown 与附件落到服务端的临时目录，每次调用结束立刻删除。
 - **本地 CLI 不受影响**：`confluence-markdown-mcp pull/push` 命令行仍然按本地文件路径工作，便于脚本和 CI 使用。
 
-> 旧版本中 `pull_page` 的 `output_dir`、`push_page` 的 `file_path` 入参已移除——它们在 HTTP / 容器部署下本来就是断的（指向的是容器内路径而不是调用方的机器）。如需让容器持续读写一份本地 Markdown 仓库，请改用 CLI 子命令并通过 `docker run -v` 挂载工作目录。
+> 旧版本中 `pull_page` 的 `output_dir`、`push_page` 的 `file_path` 入参已移除；当前 MCP 契约统一改为流式传输，由 host 决定是否把内容保存为本地文件。如需显式按本地路径读写 Markdown 仓库，请改用 CLI 子命令。
 
 ### Claude Desktop
 

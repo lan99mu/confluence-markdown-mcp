@@ -1,6 +1,6 @@
 ---
 name: confluence-markdown
-description: 通过 MCP 服务器在 Confluence wiki 页面与本地 Markdown 文件之间进行同步。可用于将页面拉到本地进行编辑，或将本地 Markdown 的改动推送回已有的 wiki 页面。
+description: 通过 MCP 服务器以 Markdown 流的形式交换 Confluence wiki 页面。可用于拉取页面供编辑，或将审核后的 Markdown 改动推送回已有的 wiki 页面。
 version: 0.2.0
 ---
 
@@ -13,16 +13,15 @@ version: 0.2.0
 当用户希望执行以下操作时调用本技能：
 
 - **读取 / 获取** 某个 Confluence 页面，用于编辑、摘要或引用
-  （需写入磁盘时使用 `pull_page` 并传入 `output_dir`；若仅需内容，使用
-  `read_page`）。
-- **编辑并发布** 本地 Markdown 的改动到 Confluence
-  （使用 `push_page`，并提供精确的文件路径与 `page_id`）。
+  （使用 `pull_page` 获取元数据 + Markdown/附件 blob；若只需 Markdown，
+  使用 `read_page`）。
+- **编辑并发布** Markdown 改动到 Confluence
+  （使用 `push_page`，传入 base64 编码后的 Markdown；必要时再传 `page_id`）。
 - **在线预览** 页面 —— 访问 `confluence://page/{page_id}` 资源。
 
-**不要** 用本技能创建全新的页面，这一功能目前不在支持范围内。页面引用的附件
-（图片与文件链接）会在两个方向上自动同步：`pull_page` 会将附件下载到
-Markdown 文件旁边的 `attachments/` 目录，`push_page` 会在更新页面正文之前
-创建/更新这些附件。
+**不要** 用本技能创建全新的页面，这一功能目前不在支持范围内。MCP 模式仍是
+本地 stdio 调用：服务端返回的是文件型 blob，是否保存为本地文件由 host 决定，
+工具契约本身不接收本地文件路径。
 
 ## 前置条件
 
@@ -35,26 +34,24 @@ Markdown 文件旁边的 `attachments/` 目录，`push_page` 会在更新页面�
 可选：
 
 - `CONFLUENCE_TIMEOUT`        —— HTTP 超时（秒），默认 `30`
-- `CONFLUENCE_MARKDOWN_DIR`   —— 相对 `output_dir` 的默认根目录
 
 认证方式二选一：使用 `CONFLUENCE_EMAIL` + `CONFLUENCE_API_TOKEN`，或设置 `CONFLUENCE_PAT`。若两者同时存在，优先使用 PAT。
 
 ## 提供的工具
 
-### `pull_page(page_id: string, output_dir?: string)`
+### `pull_page(page_id: string, download_attachments?: boolean = true)`
 
-下载一个 Confluence 页面。若传入 `output_dir`，它 **必须是一个目录** ——
-Markdown 文件名由服务器根据页面标题自动生成（不安全字符会被剥离），
-因此调用方不应传入完整文件路径。生成的文件包含 YAML 风格的 front matter
-（`page_id`、`title`、`space_key`、`version`），响应中还会返回
-`markdown_preview` 与解析后的 `path`。若未提供 `output_dir`，则在 `markdown`
-字段中直接返回完整正文。
+下载一个 Confluence 页面，返回一个简短的 JSON 元数据文本块，以及一个
+`text/markdown` 的 `EmbeddedResource` blob 作为正文。若
+`download_attachments` 为 true，则每个已下载附件还会各自返回一个
+`EmbeddedResource` blob。Markdown 正文不会以内联纯文本返回。
 
-### `push_page(file_path: string, page_id?: string, title?: string)`
+### `push_page(markdown_base64: string, page_id?: string, title?: string, upload_attachments?: boolean = true, attachments?: [{filename, content_base64}, ...])`
 
-将本地 Markdown 文件上传回 Confluence。如果文件本身的 front matter 中已包含
-`page_id`（`pull_page` 会自动写入），则可以省略参数中的 `page_id`。`title`
-默认使用 front matter 中的标题，或页面当前的标题。
+将调用方提供的 Markdown 文件流上传回 Confluence。正文必须以
+`markdown_base64` 传入。若解码后的 Markdown front matter 中已包含
+`page_id`，则可以省略参数中的 `page_id`。`title` 默认使用 front matter
+中的标题，或页面当前的标题。
 
 附件上传规则：
 
@@ -67,16 +64,17 @@ Markdown 文件名由服务器根据页面标题自动生成（不安全字符�
 
 ### `read_page(page_id: string)`
 
-`pull_page` 的便捷封装，**不会** 写入磁盘，直接返回 Markdown 正文和基础
-元数据。
+`pull_page` 的便捷封装，总是跳过附件下载；返回的仍是元数据 + 一个 Markdown
+`EmbeddedResource` blob，而不是内联正文文本。
 
 ## 推荐工作流
 
-1. 向用户询问 Confluence 页面 ID（以及可选的本地路径）。
-2. 调用 `pull_page` 并指定 `output_dir`，向用户确认新文件的位置
-   （文件名由服务器根据页面标题生成）。
+1. 向用户询问 Confluence 页面 ID。
+2. 调用 `pull_page`（或 `read_page`），并让 MCP host 自行决定是否把返回的
+   blob 保存为本地文件。
 3. 提出 Markdown 修改建议，并请用户在上传前进行评审。
-4. 使用相同的 `file_path` 调用 `push_page`，并向用户展示返回的新 `version`。
+4. 调用 `push_page`，传入 base64 编码后的 Markdown（以及可选附件 blob），并向
+   用户展示返回的新 `version`。
 
 ## 格式保留能力
 
@@ -114,6 +112,7 @@ Confluence 中的 drawio / diagrams.net 图通常通过 `html-bobswift` 宏包�
   环境变量。
 - `ConfluenceError: (401 Unauthorized)` → API Token 或 PAT 无效、已过期，或权限不足。
 - `ConfluenceError: (404 Not Found)` → 检查 `page_id` 是否正确。
-- `push_page` 抛出 `FileNotFoundError` → 检查文件的绝对路径是否存在。
+- `push_page` 抛出 `ValueError` → 检查 `markdown_base64` /
+  `attachments[].content_base64` 是否为合法 base64，且附件文件名是否安全。
 
 每次 `push_page` 成功后，请将返回的 version 号告知用户，以便确认更新。

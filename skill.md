@@ -1,6 +1,6 @@
 ---
 name: confluence-markdown
-description: Sync Confluence wiki pages with local Markdown files through an MCP server. Use it to pull a page down for editing, or push local Markdown edits back to an existing wiki page.
+description: Exchange Confluence wiki pages with Markdown streams through an MCP server. Use it to fetch a page for editing, or push reviewed Markdown changes back to an existing wiki page.
 version: 0.2.0
 ---
 
@@ -16,16 +16,16 @@ This skill teaches an MCP-capable assistant how to work with the
 Invoke this skill whenever the user wants to:
 
 - **Read / fetch** a Confluence wiki page for editing, summarisation or
-  quotation (use `pull_page` with `output_dir`, or `read_page` if you only
-  need the content).
-- **Edit and publish** local Markdown changes back to Confluence (use
-  `push_page` with the exact path and `page_id`).
+  quotation (use `pull_page` to get metadata + Markdown/attachment blobs, or
+  `read_page` if you only need the Markdown blob).
+- **Edit and publish** Markdown changes back to Confluence (use
+  `push_page` with base64-encoded Markdown, plus `page_id` when needed).
 - Preview a page inline – access the `confluence://page/{page_id}` resource.
 
 Do **not** use it for creating brand-new pages; that is out of scope in the
-current version. Attachments referenced by the page (images and file links)
-are synchronised automatically in both directions — downloaded alongside
-the Markdown file on `pull_page`, and created / updated on `push_page`.
+current version. In MCP mode the server speaks stdio and returns file-like
+blobs; the host may choose to save them locally, but the tool contract does
+not take local filesystem paths.
 
 ## Prerequisites
 
@@ -39,29 +39,26 @@ user that the following are set before the first call:
 Optional:
 
 - `CONFLUENCE_TIMEOUT`        – HTTP timeout in seconds (default `30`)
-- `CONFLUENCE_MARKDOWN_DIR`   – default root for relative `output_dir`s
 
 Authentication is either/or: use email + API token for Basic auth, or set
 `CONFLUENCE_PAT` for Bearer auth. If both are present, the PAT is used.
 
 ## Tools provided
 
-### `pull_page(page_id: string, output_dir?: string)`
+### `pull_page(page_id: string, download_attachments?: boolean = true)`
 
-Downloads a Confluence page. When `output_dir` is provided it **must be a
-directory** – the Markdown file name is generated automatically by the
-server from the page title (unsafe characters are stripped), so the
-caller should never pass a full file path. The resulting file contains
-YAML-style front matter (`page_id`, `title`, `space_key`, `version`) and
-the response includes `markdown_preview` plus the resolved `path`.
-Without `output_dir`, the full Markdown body is returned in `markdown`.
+Downloads a Confluence page and returns a short JSON metadata text block
+plus one `text/markdown` `EmbeddedResource` blob for the page body. When
+`download_attachments` is true, each downloaded attachment is returned as
+an additional `EmbeddedResource` blob. The Markdown body is not returned
+inline as plain text.
 
-### `push_page(file_path: string, page_id?: string, title?: string)`
+### `push_page(markdown_base64: string, page_id?: string, title?: string, upload_attachments?: boolean = true, attachments?: [{filename, content_base64}, ...])`
 
-Uploads a local Markdown file back to Confluence. The target `page_id` may
-be omitted if the file carries it in its front matter (which `pull_page`
-writes automatically). `title` defaults to the front-matter title or the
-page's current title.
+Uploads Markdown back to Confluence from caller-supplied file streams. The
+Markdown body must be base64-encoded in `markdown_base64`. `page_id` may
+be omitted if the decoded Markdown carries it in front matter. `title`
+defaults to the front-matter title or the page's current title.
 
 Attachment upload rules on push:
 
@@ -78,17 +75,18 @@ Attachment upload rules on push:
 
 ### `read_page(page_id: string)`
 
-Convenience wrapper around `pull_page` that never writes to disk – returns
-the Markdown body plus basic metadata.
+Convenience wrapper around `pull_page` that always skips attachment
+downloads. It still returns metadata + one Markdown `EmbeddedResource`
+blob rather than inline Markdown text.
 
 ## Recommended workflow
 
-1. Ask the user for the Confluence page ID (and optional local path).
-2. Call `pull_page` with an `output_dir`; confirm the new file location
-   (the filename is produced from the page title by the server).
+1. Ask the user for the Confluence page ID.
+2. Call `pull_page` (or `read_page`) and let the MCP host decide whether
+   to save the returned blobs as local files.
 3. Propose Markdown edits; have the user review before uploading.
-4. Call `push_page` with the same `file_path`; display the returned new
-   `version`.
+4. Call `push_page` with base64-encoded Markdown (and optional attachment
+   blobs); display the returned new `version`.
 
 ## Formatting guarantees
 
@@ -128,7 +126,8 @@ leak through a round-trip.
   export the required environment variables.
 - `ConfluenceError: (401 Unauthorized)` → the API token or PAT is invalid, expired, or lacks permission.
 - `ConfluenceError: (404 Not Found)` → double-check the `page_id`.
-- `FileNotFoundError` on `push_page` → verify the absolute file path.
+- `ValueError` on `push_page` → verify that `markdown_base64` /
+  `attachments[].content_base64` are valid base64 and filenames are safe.
 
 Always surface the returned version number after a `push_page` call so the
 user can confirm the update.

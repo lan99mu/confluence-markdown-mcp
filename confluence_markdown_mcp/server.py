@@ -3,18 +3,17 @@
 Built on top of the official `mcp` Python SDK (``mcp.server.fastmcp``)
 and exposed only through the local stdio transport.
 
-To keep page bodies out of the LLM context window (and to make the tools
-deployable in remote / containerised environments where the server has
-no access to the caller's filesystem), this server exchanges Markdown
-and attachments as **MCP file streams**:
+To keep page bodies out of the LLM context window (and to avoid coupling
+the MCP tool contract to host-specific local paths), this server
+exchanges Markdown and attachments as **MCP file streams**:
 
 * ``pull_page`` returns the Markdown body — and any referenced
   attachments — as :class:`mcp.types.EmbeddedResource` blobs with a
   small JSON metadata header. MCP hosts surface these as downloadable
   files rather than feeding them straight into the model context.
 * ``push_page`` accepts the Markdown body (and any attachments) as
-  base64-encoded file streams supplied by the caller. The server never
-  reads or writes the caller's local filesystem.
+  base64-encoded file streams supplied by the caller. The host decides
+  whether those streams are backed by local files.
 * ``read_page`` is the read-only equivalent of ``pull_page`` (no
   attachment uploads).
 * Resource ``confluence://page/{page_id}`` is the host-fetched
@@ -266,7 +265,8 @@ def create_server(
             "CONFLUENCE_PAT, in the environment. pull_page returns the "
             "Markdown body and attachments as MCP EmbeddedResource blobs; "
             "push_page expects the Markdown body (and any attachments) "
-            "as base64 file streams supplied by the caller."
+            "as base64 file streams supplied by the caller. The stdio MCP "
+            "host decides whether to persist those blobs as local files."
         ),
     )
 
@@ -288,9 +288,8 @@ def create_server(
             "download_attachments is true, each referenced attachment "
             "(images / files) as its own blob. The raw Markdown text is "
             "NOT returned inline, so it does not get fed into the model's "
-            "context window — the host client is expected to persist the "
-            "blobs as files. There is no server-side output path: this "
-            "tool is safe to run on a remote / containerised MCP server."
+            "context window — the host client may persist the blobs as "
+            "local files if it wants. There is no server-side output path."
         ),
     )
     def pull_page(
@@ -315,8 +314,8 @@ def create_server(
             "files referenced by the Markdown can be supplied as "
             "attachments=[{filename, content_base64}, ...] and will be "
             "created / updated as Confluence attachments before the page "
-            "body is replaced. The server never touches the caller's "
-            "local filesystem."
+            "body is replaced. The server does not accept a caller-side "
+            "file path; the host supplies the file streams."
         ),
     )
     def push_page(
