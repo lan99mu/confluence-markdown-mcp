@@ -1,12 +1,10 @@
-"""Tests for the file-stream based MCP pull_page / push_page tools."""
+"""Tests for the local-file-based MCP pull_page / push_page / read_page tools."""
 
 from __future__ import annotations
 
-import base64
-import json
 import os
+import tempfile
 from typing import Any
-from unittest import mock
 
 import pytest
 
@@ -17,17 +15,12 @@ from confluence_markdown_mcp.service import AttachmentInfo, PullResult, PushResu
 # ---------------------------------------------------------------- helpers
 
 
-def _b64(data: bytes) -> str:
-    return base64.b64encode(data).decode("ascii")
-
-
 class _FakeService:
     """Minimal ConfluenceService stand-in that records its arguments."""
 
-    def __init__(self, pull_result=None, push_result=None, attachment_files=None):
+    def __init__(self, pull_result=None, push_result=None):
         self.pull_result = pull_result
         self.push_result = push_result
-        self.attachment_files = attachment_files or {}
         self.pull_calls = []
         self.push_calls = []
 
@@ -38,30 +31,30 @@ class _FakeService:
                  download_attachments=download_attachments,
                  attachments_dir=attachments_dir)
         )
-        # Materialise attachments under the output_path so the server
-        # helper can stream them back. The output_path arrives with a
-        # trailing separator from server._pull_to_content_blocks.
-        if output_path and self.attachment_files:
-            att_dir = os.path.join(output_path, attachments_dir)
-            os.makedirs(att_dir, exist_ok=True)
-            for name, data in self.attachment_files.items():
-                with open(os.path.join(att_dir, name), "wb") as fh:
-                    fh.write(data)
+        # When output_path is given, simulate writing a file.
+        if output_path:
+            os.makedirs(output_path, exist_ok=True)
+            file_path = os.path.join(output_path, "Hello.md")
+            with open(file_path, "w") as f:
+                f.write(self.pull_result.markdown)
+            result = PullResult(
+                page_id=self.pull_result.page_id,
+                title=self.pull_result.title,
+                space_key=self.pull_result.space_key,
+                version=self.pull_result.version,
+                markdown=self.pull_result.markdown,
+                path=file_path,
+                attachments=self.pull_result.attachments,
+            )
+            return result
         return self.pull_result
 
     def push_page(self, file_path, page_id=None, title=None, upload_attachments=True):
         with open(file_path, "rb") as fh:
             body = fh.read()
-        att_dir = os.path.join(os.path.dirname(file_path), "attachments")
-        attachments_on_disk = {}
-        if os.path.isdir(att_dir):
-            for name in os.listdir(att_dir):
-                with open(os.path.join(att_dir, name), "rb") as fh:
-                    attachments_on_disk[name] = fh.read()
         self.push_calls.append(
             dict(file_path=file_path, page_id=page_id, title=title,
-                 upload_attachments=upload_attachments,
-                 body=body, attachments=attachments_on_disk)
+                 upload_attachments=upload_attachments, body=body)
         )
         return self.push_result
 
@@ -76,212 +69,115 @@ def _registered_tool(app, name):
 # ---------------------------------------------------------------- pull_page
 
 
-def test_pull_page_returns_metadata_text_and_markdown_blob():
+def test_pull_page_without_output_dir_returns_content():
     pull_result = PullResult(
         page_id="123",
         title="Hello",
         space_key="DOC",
         version=4,
         markdown="# Hi\n\nbody 内容",
-        path="/tmp/ignored",
+        path=None,
         attachments=[],
     )
     fake = _FakeService(pull_result=pull_result)
     app = server_module.create_server(service=fake)
 
-    blocks = _registered_tool(app, "pull_page")(page_id="123")
+    result = _registered_tool(app, "pull_page")(page_id="123")
 
-    assert len(blocks) == 2
-    meta_block, body_block = blocks
+    assert result["page_id"] == "123"
+    assert result["title"] == "Hello"
+    assert result["space_key"] == "DOC"
+    assert result["version"] == 4
+    assert result["content"] == "# Hi\n\nbody 内容"
+    assert "file_path" not in result
 
-    # metadata header is plain JSON text and does NOT contain the body
-    assert meta_block.type == "text"
-    metadata = json.loads(meta_block.text)
-    assert metadata["page_id"] == "123"
-    assert metadata["title"] == "Hello"
-    assert metadata["space_key"] == "DOC"
-    assert metadata["version"] == 4
-    assert metadata["markdown_resource_uri"] == "confluence://page/123.md"
-    assert metadata["markdown_bytes"] == len("# Hi\n\nbody 内容".encode("utf-8"))
-    assert metadata["attachments"] == []
-    assert "markdown" not in metadata
-    assert "body 内容" not in meta_block.text
-
-    # body is shipped as a binary blob, not inline text
-    assert body_block.type == "resource"
-    assert body_block.resource.mimeType == "text/markdown"
-    assert str(body_block.resource.uri) == "confluence://page/123.md"
-    assert base64.b64decode(body_block.resource.blob).decode("utf-8") == "# Hi\n\nbody 内容"
+    # Service was called without output_path
+    assert fake.pull_calls[0]["output_path"] is None
 
 
-def test_pull_page_streams_attachments_as_separate_blobs():
-    img_bytes = b"\x89PNG\r\n\x1a\nfake-png-bytes"
+def test_pull_page_with_output_dir_saves_file():
     pull_result = PullResult(
-        page_id="42",
-        title="With image",
+        page_id="123",
+        title="Hello",
         space_key="DOC",
-        version=2,
-        markdown="![image](attachments/pic.png)",
-        path=None,  # populated by service in real runs; not used here
-        attachments=[
-            AttachmentInfo(
-                filename="pic.png",
-                media_type="image/png",
-                size=len(img_bytes),
-                action="downloaded",
-                attachment_id="att-1",
-            ),
-        ],
+        version=4,
+        markdown="# Hi\n\nbody",
+        path=None,
+        attachments=[],
     )
-    fake = _FakeService(
-        pull_result=pull_result,
-        attachment_files={"pic.png": img_bytes},
-    )
+    fake = _FakeService(pull_result=pull_result)
     app = server_module.create_server(service=fake)
 
-    # Patch attachment.path to point to the file the fake service wrote.
-    def patched_pull(page_id, output_path=None, **kw):
-        result = _FakeService.pull_page(fake, page_id, output_path=output_path, **kw)
-        for att in result.attachments:
-            att.path = os.path.join(output_path, "attachments", att.filename)
-        return result
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = _registered_tool(app, "pull_page")(
+            page_id="123", output_dir=tmpdir,
+        )
 
-    with mock.patch.object(fake, "pull_page", side_effect=patched_pull):
-        blocks = _registered_tool(app, "pull_page")(page_id="42")
+    assert result["page_id"] == "123"
+    assert result["title"] == "Hello"
+    assert result["file_path"] is not None
+    assert "content" not in result
 
-    assert len(blocks) == 3  # metadata + markdown + 1 attachment
-    metadata = json.loads(blocks[0].text)
-    assert metadata["attachments"][0]["filename"] == "pic.png"
-    assert metadata["attachments"][0]["resource_uri"] == (
-        "confluence://page/42/attachment/pic.png"
-    )
-
-    att_block = blocks[2]
-    assert att_block.type == "resource"
-    assert att_block.resource.mimeType == "image/png"
-    assert str(att_block.resource.uri) == "confluence://page/42/attachment/pic.png"
-    assert base64.b64decode(att_block.resource.blob) == img_bytes
-
-
-def test_pull_page_respects_download_attachments_flag():
-    fake = _FakeService(pull_result=PullResult(
-        page_id="1", title="t", space_key="s", version=1, markdown="x"
-    ))
-    app = server_module.create_server(service=fake)
-
-    _registered_tool(app, "pull_page")(page_id="1", download_attachments=False)
-
-    assert fake.pull_calls[0]["download_attachments"] is False
-
-
-def test_pull_page_does_not_leak_workdir():
-    """The temp dir created for attachment streaming must be cleaned up."""
-
-    fake = _FakeService(pull_result=PullResult(
-        page_id="1", title="t", space_key="s", version=1, markdown="x"
-    ))
-    app = server_module.create_server(service=fake)
-
-    _registered_tool(app, "pull_page")(page_id="1")
-
-    output_path = fake.pull_calls[0]["output_path"]
-    assert output_path  # was provided
-    assert not os.path.exists(output_path.rstrip(os.sep))
+    # Service was called with output_path ending in separator
+    call = fake.pull_calls[0]
+    assert call["output_path"].endswith(os.sep)
+    assert call["download_attachments"] is True
 
 
 # ---------------------------------------------------------------- push_page
 
 
-def test_push_page_consumes_markdown_base64_and_calls_service():
-    pushed_body = "---\npage_id: \"99\"\ntitle: \"T\"\n---\n\nhello"
+def test_push_page_reads_local_file():
     fake = _FakeService(push_result=PushResult(
         page_id="99", title="T", version=7, attachments=[],
     ))
     app = server_module.create_server(service=fake)
 
-    payload = _registered_tool(app, "push_page")(
-        markdown_base64=_b64(pushed_body.encode("utf-8")),
-        title="T",
-    )
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
+        f.write("---\npage_id: \"99\"\ntitle: \"T\"\n---\n\nhello")
+        f.flush()
+        tmp_path = f.name
 
-    assert payload == {
-        "page_id": "99",
-        "title": "T",
-        "version": 7,
-        "attachments": [],
-    }
-    call = fake.push_calls[0]
-    assert call["body"].decode("utf-8") == pushed_body
-    assert call["title"] == "T"
-    assert call["upload_attachments"] is True
-    # workdir cleaned up
-    assert not os.path.exists(call["file_path"])
+    try:
+        result = _registered_tool(app, "push_page")(file_path=tmp_path, title="T")
 
-
-def test_push_page_streams_attachments_to_workdir():
-    body = "body"
-    img = b"\x00\x01binary\x02"
-    fake = _FakeService(push_result=PushResult(
-        page_id="1", title="t", version=1,
-        attachments=[AttachmentInfo(filename="pic.png", action="created")],
-    ))
-    app = server_module.create_server(service=fake)
-
-    _registered_tool(app, "push_page")(
-        markdown_base64=_b64(body.encode("utf-8")),
-        page_id="1",
-        attachments=[
-            {"filename": "pic.png", "content_base64": _b64(img)},
-        ],
-    )
-
-    call = fake.push_calls[0]
-    assert call["attachments"] == {"pic.png": img}
+        assert result == {
+            "page_id": "99",
+            "title": "T",
+            "version": 7,
+        }
+        call = fake.push_calls[0]
+        assert call["file_path"] == tmp_path
+        assert call["title"] == "T"
+        assert call["upload_attachments"] is True
+    finally:
+        os.unlink(tmp_path)
 
 
-def test_push_page_rejects_path_traversal_in_attachment_filename():
+def test_push_page_rejects_missing_file():
     fake = _FakeService(push_result=PushResult(
         page_id="1", title="t", version=1, attachments=[],
     ))
     app = server_module.create_server(service=fake)
 
-    with pytest.raises(ValueError, match="unsafe attachment filename"):
-        _registered_tool(app, "push_page")(
-            markdown_base64=_b64(b"body"),
-            page_id="1",
-            attachments=[
-                {"filename": "../escape.txt", "content_base64": _b64(b"x")},
-            ],
-        )
+    with pytest.raises(ValueError, match="not a valid file"):
+        _registered_tool(app, "push_page")(file_path="/nonexistent/file.md")
 
 
-def test_push_page_rejects_invalid_base64():
+def test_push_page_rejects_empty_path():
     fake = _FakeService(push_result=PushResult(
         page_id="1", title="t", version=1, attachments=[],
     ))
     app = server_module.create_server(service=fake)
 
-    with pytest.raises(ValueError, match="not valid base64"):
-        _registered_tool(app, "push_page")(
-            markdown_base64="!!!not-base64!!!",
-            page_id="1",
-        )
-
-
-def test_push_page_requires_markdown_payload():
-    fake = _FakeService(push_result=PushResult(
-        page_id="1", title="t", version=1, attachments=[],
-    ))
-    app = server_module.create_server(service=fake)
-
-    with pytest.raises(ValueError, match="markdown_base64 is required"):
-        _registered_tool(app, "push_page")(markdown_base64="", page_id="1")
+    with pytest.raises(ValueError, match="not a valid file"):
+        _registered_tool(app, "push_page")(file_path="")
 
 
 # ---------------------------------------------------------------- read_page
 
 
-def test_read_page_returns_blob_without_attachments_and_without_inline_text():
+def test_read_page_returns_content_without_file_write():
     pull_result = PullResult(
         page_id="55", title="R", space_key="S", version=1,
         markdown="confidential body",
@@ -290,11 +186,10 @@ def test_read_page_returns_blob_without_attachments_and_without_inline_text():
     fake = _FakeService(pull_result=pull_result)
     app = server_module.create_server(service=fake)
 
-    blocks = _registered_tool(app, "read_page")(page_id="55")
+    result = _registered_tool(app, "read_page")(page_id="55")
 
-    assert fake.pull_calls[0]["download_attachments"] is False
-    assert len(blocks) == 2
-    # body must not appear in the text block
-    assert "confidential body" not in blocks[0].text
-    # but is available as a blob
-    assert base64.b64decode(blocks[1].resource.blob).decode("utf-8") == "confidential body"
+    assert result["page_id"] == "55"
+    assert result["title"] == "R"
+    assert result["content"] == "confidential body"
+    # Service was called without output_path
+    assert fake.pull_calls[0]["output_path"] is None
