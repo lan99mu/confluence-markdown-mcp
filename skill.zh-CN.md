@@ -62,6 +62,8 @@ Markdown 文件名由服务器根据页面标题自动生成（不安全字符�
 - 普通文件链接只有在链接后紧跟 `<!--cm-attachment-->` 时才会作为附件上传，例如
   `[file](attachments/example.eml) <!--cm-attachment-->`。
 - marker 必须写在链接**后面**；`<!--cm-attachment-->[file](...)` 不会被识别。
+- `pull_page` / `read_page` 在生成附件 Markdown 路径时，会对空格、括号、非 ASCII
+  字符等做 URL 编码，避免链接被 Markdown 解析器拆坏。
 - URL 编码的本地路径会在匹配文件和生成附件名之前先 decode，因此编码路径与本地
   中文文件名、空格等场景会保持一致。
 
