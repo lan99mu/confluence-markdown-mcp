@@ -647,6 +647,40 @@ def test_single_column_table_does_not_eat_horizontal_rule_like_lines():
     assert "<table>" not in storage
 
 
+def test_macro_in_table_cell_does_not_break_table_row():
+    """``<ac:structured-macro>`` inside a table cell must not break the row.
+
+    The placeholder replacement for a macro contains ``\\n\\n`` prefix and
+    suffix.  If those newlines are not stripped before the cell is assembled
+    into the Markdown table, the row is split across multiple lines and the
+    content appears outside the table (i.e. is effectively missing).
+    """
+    storage = (
+        "<table><tbody>"
+        "<tr><th>Document</th><th>Status</th></tr>"
+        "<tr>"
+        '<td><ac:structured-macro ac:name="view-file" ac:schema-version="1">'
+        '<ac:parameter ac:name="name"><ri:attachment ri:filename="report.pdf"/></ac:parameter>'
+        "</ac:structured-macro></td>"
+        "<td>Approved</td>"
+        "</tr>"
+        "</tbody></table>"
+        "<p>After table</p>"
+    )
+
+    md = storage_to_markdown(storage)
+
+    # The macro content must sit inside a table cell, not outside the table.
+    lines = md.splitlines()
+    table_lines = [l for l in lines if l.startswith("|")]
+    assert len(table_lines) == 3, f"Expected 3 table rows, got: {table_lines}"
+    data_row = table_lines[2]
+    assert "confluence-macro" in data_row, "Macro content missing from table cell"
+    assert "Approved" in data_row, "Adjacent cell content missing"
+    # Content after the table must still be present.
+    assert "After table" in md
+
+
 def test_empty_styled_table_round_trip_preserves_width_style():
     storage = (
         '<table data-table-width="1200" data-layout="default">'

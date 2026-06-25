@@ -70,7 +70,7 @@ def storage_to_markdown(storage_html: str) -> str:
     if root is None:
         return ""
 
-    renderer = _Renderer()
+    renderer = _Renderer(replacements)
     renderer.visit_children(root)
     markdown_text = renderer.finish()
     markdown_text = postprocess_markdown(markdown_text, replacements)
@@ -87,7 +87,7 @@ def storage_to_markdown(storage_html: str) -> str:
 class _Renderer:
     """Recursive visitor that accumulates Markdown fragments."""
 
-    def __init__(self) -> None:
+    def __init__(self, replacements: Optional[List[str]] = None) -> None:
         self._out: List[str] = []
         # Stack of writable buffers – the top of the stack is where
         # ``_emit`` appends.  A new buffer is pushed while rendering the
@@ -100,6 +100,10 @@ class _Renderer:
         # Blockquote state – number of currently-open ``<blockquote>`` levels.
         # A post-processing pass prefixes the appropriate number of ``> ``.
         self._in_blockquote = 0
+        # Macro placeholder replacements – supplied so table cells can
+        # expand placeholders inline before normalising, preventing the
+        # ``\n\n`` that macros emit from breaking the table row.
+        self._replacements: Optional[List[str]] = replacements
 
     # --------------------------------------------------------------- core
     def finish(self) -> str:
@@ -323,6 +327,11 @@ class _Renderer:
                 self._push_buffer()
                 self.visit_children(cell)
                 cell_text = self._pop_buffer()
+                # Expand any macro placeholders now so that the \n\n
+                # prefix/suffix they carry does not break the table row
+                # when ``_normalise_cell`` later flattens the content.
+                if self._replacements is not None:
+                    cell_text = postprocess_markdown(cell_text, self._replacements)
                 row.append(_normalise_cell(cell_text))
                 if tag == "th":
                     row_is_header = True
