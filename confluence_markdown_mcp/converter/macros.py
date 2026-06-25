@@ -377,6 +377,12 @@ def attachment_filename_from_ref(ref: str, fallback: str = "attachment") -> str:
     )
 
 
+def _encode_markdown_attachment_target(target: str) -> str:
+    """Encode a local attachment target so Markdown parsers keep it intact."""
+
+    return urllib.parse.quote((target or "").replace("\\", "/"), safe="/")
+
+
 def _format_image_attrs(attrs: "dict[str, str]") -> str:
     """Serialise preserved image attributes as an HTML comment.
 
@@ -445,18 +451,21 @@ def _rewrite_ac_images(storage_html: str, replacements: List[str]) -> str:
             url = u.get("ri:value", "")
 
         target: str
+        target_escaped: str
         if filename:
             safe = sanitize_attachment_filename(filename)
             target = f"{ATTACHMENTS_DIRNAME}/{safe}"
+            target_escaped = _encode_markdown_attachment_target(target)
         elif url:
             target = url
+            target_escaped = url
         else:
             # Unknown form – drop the element but keep a tiny placeholder
             # so editors can notice the missing asset.
             target = ""
+            target_escaped = ""
 
         alt_escaped = alt.replace("[", r"\[").replace("]", r"\]")
-        target_escaped = (target or "").replace("(", "%28").replace(")", "%29")
         snippet = f"![{alt_escaped}]({target_escaped})"
         marker = _format_image_attrs(attrs)
         if marker:
@@ -506,7 +515,7 @@ def _rewrite_ac_attachment_links(storage_html: str, replacements: List[str]) -> 
         safe = sanitize_attachment_filename(filename)
         target = f"{ATTACHMENTS_DIRNAME}/{safe}"
         label_escaped = label.replace("[", r"\[").replace("]", r"\]")
-        target_escaped = target.replace("(", "%28").replace(")", "%29")
+        target_escaped = _encode_markdown_attachment_target(target)
         snippet = f"[{label_escaped}]({target_escaped}){_ATTACHMENT_LINK_MARKER}"
         replacements.append(snippet)
         return f"{PLACEHOLDER_PREFIX}{len(replacements) - 1}{_PLACEHOLDER_END}"

@@ -73,6 +73,20 @@ def test_attachment_link_with_urlencoded_filename_decodes_name():
     )
 
 
+def test_attachment_link_round_trip_urlencodes_markdown_unsafe_filename():
+    storage = (
+        "<p><ac:link>"
+        '<ri:attachment ri:filename="a -- (b).txt" />'
+        "<ac:plain-text-link-body><![CDATA[Download]]></ac:plain-text-link-body>"
+        "</ac:link></p>"
+    )
+    md = storage_to_markdown(storage)
+    assert "[Download](attachments/a%20--%20%28b%29.txt)<!--cm-attachment-->" in md
+
+    back = markdown_to_storage(md)
+    assert '<ri:attachment ri:filename="a -- (b).txt"' in back
+
+
 def test_orphan_image_comment_is_dropped():
     # If the user removes an image but leaves the marker behind, we must
     # not emit an unsafe HTML comment back to Confluence.
@@ -108,3 +122,18 @@ def test_image_src_with_urlencoded_filename_decodes_name():
     )
     back = markdown_to_storage(md)
     assert 'ri:filename="附件示例.eml"' in back
+
+
+def test_image_round_trip_urlencodes_unicode_filename():
+    storage = (
+        '<p><ac:image><ri:attachment ri:filename="超长附件名1234567890.png" /></ac:image></p>'
+    )
+    md = storage_to_markdown(storage)
+    assert (
+        "!["
+        "](attachments/%E8%B6%85%E9%95%BF%E9%99%84%E4%BB%B6%E5%90%8D1234567890.png)"
+        in md
+    )
+
+    back = markdown_to_storage(md)
+    assert 'ri:filename="超长附件名1234567890.png"' in back
