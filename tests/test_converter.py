@@ -645,3 +645,29 @@ def test_single_column_table_does_not_eat_horizontal_rule_like_lines():
     md = "Some text\n\n---\n\nMore text\n"
     storage = markdown_to_storage(md)
     assert "<table>" not in storage
+
+
+def test_empty_styled_table_round_trip_preserves_width_style():
+    storage = (
+        '<table data-table-width="1200" data-layout="default">'
+        "<colgroup>"
+        '<col style="width: 600.0px;" />'
+        '<col style="width: 600.0px;" />'
+        "</colgroup>"
+        "<tbody>"
+        "<tr><th><br /></th><th><br /></th></tr>"
+        "</tbody>"
+        "</table>"
+    )
+
+    md = storage_to_markdown(storage)
+    assert "<table" in md
+    assert "data-table-width=\"1200\"" in md
+    assert "data-layout=\"default\"" in md
+    assert "width: 600.0px" in md
+    assert "| --- |" not in md
+
+    back = markdown_to_storage(md)
+    assert 'data-table-width="1200"' in back
+    assert 'data-layout="default"' in back
+    assert "width: 600.0px" in back

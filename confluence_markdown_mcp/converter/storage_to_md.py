@@ -333,6 +333,12 @@ class _Renderer:
 
         rows = [row for row in rows if row]
         if not rows:
+            raw_table = lxml_html.tostring(el, encoding="unicode", method="html")
+            self._emit(f"\n\n{raw_table}\n\n")
+            return
+        if all(all(cell == "" for cell in row) for row in rows):
+            raw_table = lxml_html.tostring(el, encoding="unicode", method="html")
+            self._emit(f"\n\n{raw_table}\n\n")
             return
         max_cols = max(len(r) for r in rows)
         rows = [r + [""] * (max_cols - len(r)) for r in rows]
