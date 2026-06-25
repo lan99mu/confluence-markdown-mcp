@@ -185,6 +185,8 @@ confluence-markdown-mcp serve
 
 - `<!--cm-attachment-->` **必须写在链接后面**，写在前面不会被识别。
 - 未加 marker 的普通链接会按普通 `<a href="...">` 处理，不会自动上传为附件。
+- `pull_page` / `read_page` 生成附件引用时，会对空格、括号、非 ASCII 字符等做
+  URL 编码，避免 Markdown 解析器把链接拆坏。
 - URL 编码路径会先 decode 再处理，因此
   `attachments/%E9%99%84%E4%BB%B6%E7%A4%BA%E4%BE%8B.eml`
   会与本地文件 `attachments/附件示例.eml` 匹配，并使用同一个附件文件名。

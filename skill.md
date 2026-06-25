@@ -72,6 +72,9 @@ Attachment upload rules on push:
   `[file](attachments/example.eml) <!--cm-attachment-->`.
 - The marker must come **after** the link. `<!--cm-attachment-->[file](...)`
   is not recognised.
+- `pull_page` / `read_page` URL-encode Markdown attachment targets when the
+  filename contains spaces, parentheses, or non-ASCII characters so the link
+  survives a round trip through Markdown parsers.
 - URL-encoded local paths are decoded before matching and naming the
   attachment, so an encoded path and the decoded local filename stay in
   sync on upload and in the page body.
